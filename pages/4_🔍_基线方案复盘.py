@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.schemas import BaselineScheme, ReviewRecord, SimulationResult
-from core.simulation import perform_review_comparison, calculate_unit_cost
+from models.schemas import BaselineScheme, ReviewRecord, SimulationResult, ThresholdConfig
+from core.simulation import perform_review_comparison, calculate_unit_cost, evaluate_threshold, generate_review_threshold_conclusion
 from data.persistence import (
     load_simulation_results,
     load_baseline_schemes,
@@ -19,7 +19,10 @@ from data.persistence import (
     add_review_record,
     delete_review_record,
     export_review_report,
-    ensure_dirs
+    ensure_dirs,
+    load_threshold_templates,
+    get_threshold_template_by_id,
+    get_default_threshold_template
 )
 
 
@@ -80,7 +83,7 @@ def main():
     
     ensure_dirs()
     
-    tab1, tab2, tab3 = st.tabs(["🎯 基线方案管理", "📊 方案对比复盘", "📋 历史复盘记录"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🎯 基线方案管理", "📊 方案对比复盘", "📋 历史复盘记录", "⚙️ 阈值模板管理"])
     
     with tab1:
         manage_baseline_schemes()
@@ -90,6 +93,9 @@ def main():
     
     with tab3:
         view_review_history()
+    
+    with tab4:
+        manage_threshold_templates()
 
 
 def manage_baseline_schemes():
@@ -313,7 +319,7 @@ def perform_scheme_review():
     
     st.markdown("#### 🔧 复盘配置")
     
-    col_cfg1, col_cfg2, col_cfg3 = st.columns([1, 1, 1])
+    col_cfg1, col_cfg2, col_cfg3, col_cfg4 = st.columns([1.2, 1, 1, 1])
     
     with col_cfg1:
         baseline_options = []
@@ -344,11 +350,24 @@ def perform_scheme_review():
             return
     
     with col_cfg2:
+        templates = load_threshold_templates()
+        template_options = [(t.id, f"{t.name} {'(默认)' if t.is_default else ''}") for t in templates]
+        template_ids = [t[0] for t in template_options]
+        template_labels = [t[1] for t in template_options]
+        
+        selected_template_label = st.selectbox(
+            "选择阈值模板",
+            options=template_labels
+        )
+        selected_template_id = template_ids[template_labels.index(selected_template_label)]
+        selected_threshold = get_threshold_template_by_id(selected_template_id)
+    
+    with col_cfg3:
         departments = sorted(list(set([r.department for r in all_results if r.department])))
         departments = ["全部"] + departments
         dept_filter = st.selectbox("按部门筛选", options=departments)
     
-    with col_cfg3:
+    with col_cfg4:
         date_options = ["全部", "最近7天", "最近30天", "最近90天"]
         date_filter = st.selectbox("按时间筛选", options=date_options)
     
@@ -383,8 +402,14 @@ def perform_scheme_review():
     
     st.markdown("#### 📋 选择对比方案")
     
+    status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
     result_display = []
     for r in filtered_results:
+        status_display = "-"
+        if r.threshold_evaluation:
+            status = r.threshold_evaluation.overall_status
+            status_display = f"{status_colors.get(status, '⚪')} {status}"
+        
         result_display.append({
             "id": r.id,
             "方案名称": r.params_name,
@@ -392,7 +417,8 @@ def perform_scheme_review():
             "部门": r.department,
             "平均等待": f"{r.avg_wait_time:.2f}分",
             "总接待量": f"{r.total_reception:.0f}人",
-            "预估成本": f"{r.cost_estimate:.2f}元"
+            "预估成本": f"{r.cost_estimate:.2f}元",
+            "状态": status_display
         })
     
     df_results = pd.DataFrame(result_display)
@@ -432,11 +458,26 @@ def perform_scheme_review():
     ):
         if can_create and selected_results and baseline_result and review_name:
             comparison_items = perform_review_comparison(baseline_result, selected_results)
+            
+            if selected_threshold:
+                for item in comparison_items:
+                    result_for_eval = None
+                    for r in selected_results:
+                        if r.id == item.result_id:
+                            result_for_eval = r
+                            break
+                    
+                    if result_for_eval:
+                        evaluation = evaluate_threshold(result_for_eval, selected_threshold)
+                        item.threshold_evaluation = evaluation
+                        item.threshold_conclusion = generate_review_threshold_conclusion(item, evaluation)
+            
             st.session_state.current_review_items = comparison_items
             st.session_state.current_review_baseline = selected_baseline
             st.session_state.current_review_baseline_result = baseline_result
             st.session_state.current_review_name = review_name
             st.session_state.current_review_remarks = review_remarks
+            st.session_state.current_review_threshold = selected_threshold
         elif not can_create:
             st.warning("⚠️ 您没有权限发起复盘对比。")
     
@@ -451,11 +492,14 @@ def show_review_results():
     items = st.session_state.current_review_items
     baseline = st.session_state.current_review_baseline
     baseline_result = st.session_state.current_review_baseline_result
+    threshold = st.session_state.get("current_review_threshold")
     
     if not items:
         return
     
     st.info(f"🎯 **基线方案**: {baseline.name}")
+    if threshold:
+        st.caption(f"📊 使用阈值模板: {threshold.name}")
     
     baseline_unit_cost = calculate_unit_cost(baseline_result)
     
@@ -473,6 +517,8 @@ def show_review_results():
     
     st.markdown("---")
     
+    has_threshold = any(item.threshold_evaluation is not None for item in items)
+    
     comparison_data = []
     for rank, item in enumerate(items, 1):
         conclusion_color = {
@@ -481,7 +527,7 @@ def show_review_results():
             "退化": "🔴"
         }.get(item.conclusion, "⚪")
         
-        comparison_data.append({
+        row_data = {
             "排名": rank,
             "方案名称": item.result_name,
             "平均等待差异": f"{item.avg_wait_time_diff:+.2f}分",
@@ -496,7 +542,20 @@ def show_review_results():
             "单位成本变化": f"{item.unit_cost_change_rate:+.2%}",
             "综合结论": f"{conclusion_color} {item.conclusion}",
             "综合评分": f"{item.score:.2f}"
-        })
+        }
+        
+        if has_threshold:
+            status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+            if item.threshold_evaluation:
+                row_data["阈值状态"] = f"{status_colors.get(item.threshold_evaluation.overall_status, '⚪')} {item.threshold_evaluation.overall_status}"
+                row_data["阈值评分"] = f"{item.threshold_evaluation.overall_score:.1f}"
+                row_data["复盘结论"] = item.threshold_conclusion or "-"
+            else:
+                row_data["阈值状态"] = "-"
+                row_data["阈值评分"] = "-"
+                row_data["复盘结论"] = "-"
+        
+        comparison_data.append(row_data)
     
     df_comparison = pd.DataFrame(comparison_data)
     st.dataframe(df_comparison, use_container_width=True, hide_index=True)
@@ -505,6 +564,8 @@ def show_review_results():
     
     st.subheader("💡 综合结论与推荐排序")
     
+    status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+    
     for rank, item in enumerate(items, 1):
         conclusion_emoji = {
             "更优": "🟢",
@@ -512,7 +573,18 @@ def show_review_results():
             "退化": "🔴"
         }.get(item.conclusion, "⚪")
         
-        with st.expander(f"#{rank} {item.result_name} - {conclusion_emoji} {item.conclusion} (评分: {item.score:.2f})", expanded=True):
+        expander_title = f"#{rank} {item.result_name} - {conclusion_emoji} {item.conclusion} (评分: {item.score:.2f})"
+        
+        if item.threshold_evaluation:
+            threshold_status = item.threshold_evaluation.overall_status
+            expander_title += f" | {status_colors.get(threshold_status, '⚪')} 阈值: {threshold_status}"
+        
+        with st.expander(expander_title, expanded=True):
+            if item.threshold_conclusion:
+                st.markdown(f"### 📊 阈值复盘结论")
+                st.success(f"**{item.threshold_conclusion}**")
+                st.markdown("---")
+            
             col_a, col_b, col_c = st.columns(3)
             
             with col_a:
@@ -533,6 +605,27 @@ def show_review_results():
                 st.warning(f"总成本 {cost_text} {abs(item.cost_estimate_diff):.2f} 元")
                 unit_text = "降低" if item.unit_cost_diff < 0 else "增加" if item.unit_cost_diff > 0 else "持平"
                 st.warning(f"单位成本 {unit_text} {abs(item.unit_cost_diff):.2f} 元/人")
+            
+            if item.threshold_evaluation:
+                st.markdown("---")
+                st.markdown("**🎯 阈值评估详情**")
+                col_t1, col_t2, col_t3, col_t4, col_t5 = st.columns(5)
+                
+                eval_obj = item.threshold_evaluation
+                threshold_metrics = [
+                    ("平均等待", eval_obj.avg_wait_time_status, eval_obj.avg_wait_time_reason),
+                    ("最大等待", eval_obj.max_wait_time_status, eval_obj.max_wait_time_reason),
+                    ("总接待量", eval_obj.total_reception_status, eval_obj.total_reception_reason),
+                    ("预估成本", eval_obj.cost_estimate_status, eval_obj.cost_estimate_reason),
+                    ("单位成本", eval_obj.unit_cost_status, eval_obj.unit_cost_reason)
+                ]
+                
+                for j, (metric_name, status, reason) in enumerate(threshold_metrics):
+                    with [col_t1, col_t2, col_t3, col_t4, col_t5][j]:
+                        color = status_colors.get(status, "⚪")
+                        st.markdown(f"**{metric_name}**")
+                        st.markdown(f"{color} **{status}**")
+                        st.caption(reason)
     
     st.markdown("---")
     
@@ -660,6 +753,9 @@ def view_review_history():
         
         st.markdown("#### 📊 对比结果")
         
+        status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+        has_threshold = any(item.threshold_evaluation is not None for item in selected_review.comparison_items)
+        
         detail_data = []
         for rank, item in enumerate(selected_review.comparison_items, 1):
             conclusion_color = {
@@ -668,7 +764,7 @@ def view_review_history():
                 "退化": "🔴"
             }.get(item.conclusion, "⚪")
             
-            detail_data.append({
+            row_data = {
                 "排名": rank,
                 "方案名称": item.result_name,
                 "平均等待差异": f"{item.avg_wait_time_diff:+.2f}分",
@@ -679,10 +775,45 @@ def view_review_history():
                 "单位成本差异": f"{item.unit_cost_diff:+.2f}元/人",
                 "综合结论": f"{conclusion_color} {item.conclusion}",
                 "综合评分": f"{item.score:.2f}"
-            })
+            }
+            
+            if has_threshold:
+                if item.threshold_evaluation:
+                    row_data["阈值状态"] = f"{status_colors.get(item.threshold_evaluation.overall_status, '⚪')} {item.threshold_evaluation.overall_status}"
+                    row_data["阈值复盘结论"] = item.threshold_conclusion or "-"
+                else:
+                    row_data["阈值状态"] = "-"
+                    row_data["阈值复盘结论"] = "-"
+            
+            detail_data.append(row_data)
         
         df_detail = pd.DataFrame(detail_data)
         st.dataframe(df_detail, use_container_width=True, hide_index=True)
+        
+        if has_threshold:
+            st.markdown("#### 🎯 阈值评估详情")
+            for rank, item in enumerate(selected_review.comparison_items, 1):
+                if item.threshold_evaluation:
+                    eval_obj = item.threshold_evaluation
+                    with st.expander(f"#{rank} {item.result_name} - {status_colors.get(eval_obj.overall_status, '⚪')} {eval_obj.overall_status}"):
+                        if item.threshold_conclusion:
+                            st.success(f"**复盘结论**: {item.threshold_conclusion}")
+                        
+                        col_t1, col_t2, col_t3, col_t4, col_t5 = st.columns(5)
+                        threshold_metrics = [
+                            ("平均等待", eval_obj.avg_wait_time_status, eval_obj.avg_wait_time_reason),
+                            ("最大等待", eval_obj.max_wait_time_status, eval_obj.max_wait_time_reason),
+                            ("总接待量", eval_obj.total_reception_status, eval_obj.total_reception_reason),
+                            ("预估成本", eval_obj.cost_estimate_status, eval_obj.cost_estimate_reason),
+                            ("单位成本", eval_obj.unit_cost_status, eval_obj.unit_cost_reason)
+                        ]
+                        
+                        for j, (metric_name, status, reason) in enumerate(threshold_metrics):
+                            with [col_t1, col_t2, col_t3, col_t4, col_t5][j]:
+                                color = status_colors.get(status, "⚪")
+                                st.markdown(f"**{metric_name}**")
+                                st.markdown(f"{color} **{status}**")
+                                st.caption(reason)
         
         col_export2, col_del = st.columns([1, 1])
         with col_export2:
@@ -707,6 +838,172 @@ def view_review_history():
                     if delete_review_record(selected_review.id):
                         st.success("复盘记录已删除")
                         st.rerun()
+
+
+def manage_threshold_templates():
+    st.subheader("⚙️ 阈值模板管理")
+    
+    current_role = get_current_user_role()
+    can_manage = check_permission("manage_threshold_templates")
+    
+    if not can_manage:
+        st.info("🔒 您只有查看权限，无法管理阈值模板。如需创建或修改模板，请联系管理员。")
+    
+    try:
+        templates = load_threshold_templates()
+    except Exception as e:
+        st.error(f"加载阈值模板失败: {e}")
+        templates = []
+    
+    col_create, col_list = st.columns([1, 2])
+    
+    with col_create:
+        st.markdown("#### ➕ 创建/编辑模板")
+        
+        template_name = st.text_input("模板名称", placeholder="请输入模板名称")
+        department = st.text_input("适用部门", value="default")
+        
+        st.markdown("**⏱️ 等待时长阈值**")
+        col_w1, col_w2 = st.columns(2)
+        with col_w1:
+            avg_wait_warn = st.number_input("平均等待预警值(分钟)", min_value=0.1, max_value=120.0, value=7.0, step=0.5)
+        with col_w2:
+            avg_wait_max = st.number_input("平均等待最大值(分钟)", min_value=avg_wait_warn, max_value=180.0, value=10.0, step=0.5)
+        
+        col_mw1, col_mw2 = st.columns(2)
+        with col_mw1:
+            max_wait_warn = st.number_input("最大等待预警值(分钟)", min_value=0.1, max_value=300.0, value=20.0, step=1.0)
+        with col_mw2:
+            max_wait_max = st.number_input("最大等待最大值(分钟)", min_value=max_wait_warn, max_value=600.0, value=30.0, step=1.0)
+        
+        st.markdown("**👥 接待量阈值**")
+        col_r1, col_r2 = st.columns(2)
+        with col_r1:
+            total_recep_min = st.number_input("总接待最小值(人)", min_value=1.0, max_value=2000.0, value=200.0, step=10.0)
+        with col_r2:
+            total_recep_warn = st.number_input("总接待目标值(人)", min_value=total_recep_min, max_value=5000.0, value=250.0, step=10.0)
+        
+        st.markdown("**💰 成本阈值**")
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            cost_warn = st.number_input("预估成本预警值(元)", min_value=100.0, max_value=100000.0, value=4000.0, step=100.0)
+        with col_c2:
+            cost_max = st.number_input("预估成本最大值(元)", min_value=cost_warn, max_value=200000.0, value=5000.0, step=100.0)
+        
+        col_uc1, col_uc2 = st.columns(2)
+        with col_uc1:
+            unit_cost_warn = st.number_input("单位成本预警值(元/人)", min_value=0.1, max_value=500.0, value=15.0, step=1.0)
+        with col_uc2:
+            unit_cost_max = st.number_input("单位成本最大值(元/人)", min_value=unit_cost_warn, max_value=1000.0, value=20.0, step=1.0)
+        
+        is_default = st.checkbox("设为默认模板")
+        
+        create_disabled = not can_manage or not template_name
+        
+        if st.button("✅ 保存模板", use_container_width=True, disabled=create_disabled):
+            if template_name:
+                new_template = ThresholdConfig(
+                    name=template_name,
+                    avg_wait_time_max=avg_wait_max,
+                    avg_wait_time_warning=avg_wait_warn,
+                    max_wait_time_max=max_wait_max,
+                    max_wait_time_warning=max_wait_warn,
+                    total_reception_min=total_recep_min,
+                    total_reception_warning=total_recep_warn,
+                    cost_estimate_max=cost_max,
+                    cost_estimate_warning=cost_warn,
+                    unit_cost_max=unit_cost_max,
+                    unit_cost_warning=unit_cost_warn,
+                    is_default=is_default,
+                    created_by=get_current_username(),
+                    department=department
+                )
+                
+                if add_threshold_template(new_template):
+                    st.success(f"✅ 模板 '{template_name}' 创建成功！")
+                    st.rerun()
+                else:
+                    st.error("创建模板失败，请重试。")
+    
+    with col_list:
+        st.markdown("#### 📋 现有模板列表")
+        
+        if not templates:
+            st.info("📭 暂无阈值模板。")
+        else:
+            template_data = []
+            for t in templates:
+                template_data.append({
+                    "id": t.id,
+                    "模板名称": t.name,
+                    "默认": "✅" if t.is_default else "-",
+                    "创建人": t.created_by,
+                    "创建时间": t.created_at[:19] if t.created_at else "",
+                    "部门": t.department,
+                    "平均等待预警": f"{t.avg_wait_time_warning}分",
+                    "平均等待最大": f"{t.avg_wait_time_max}分",
+                    "总接待目标": f"{t.total_reception_warning}人",
+                    "成本预警": f"{t.cost_estimate_warning}元"
+                })
+            
+            df_templates = pd.DataFrame(template_data)
+            df_show = df_templates.drop(columns=["id"])
+            
+            event = st.dataframe(
+                df_show,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+            
+            selected_idx = None
+            if event.selection and hasattr(event.selection, 'rows') and event.selection.rows:
+                selected_idx = event.selection.rows[0]
+            
+            if selected_idx is not None and 0 <= selected_idx < len(templates):
+                selected_template = templates[selected_idx]
+                st.markdown("---")
+                
+                col_act1, col_act2 = st.columns([1, 1])
+                
+                with col_act1:
+                    if can_manage and not selected_template.is_default:
+                        if st.button("⭐ 设为默认", use_container_width=True):
+                            if update_threshold_template(selected_template.id, is_default=True):
+                                st.success("已设为默认模板")
+                                st.rerun()
+                    elif selected_template.is_default:
+                        st.info("⭐ 当前为默认模板")
+                
+                with col_act2:
+                    if can_manage and current_role == "admin":
+                        if st.button("🗑️ 删除模板", use_container_width=True, type="secondary"):
+                            if delete_threshold_template(selected_template.id):
+                                st.success("模板已删除")
+                                st.rerun()
+                
+                with st.expander("📊 查看模板详情", expanded=True):
+                    col_d1, col_d2, col_d3 = st.columns(3)
+                    
+                    with col_d1:
+                        st.markdown("**⏱️ 等待时长**")
+                        st.write(f"平均等待预警: {selected_template.avg_wait_time_warning} 分钟")
+                        st.write(f"平均等待最大: {selected_template.avg_wait_time_max} 分钟")
+                        st.write(f"最大等待预警: {selected_template.max_wait_time_warning} 分钟")
+                        st.write(f"最大等待最大: {selected_template.max_wait_time_max} 分钟")
+                    
+                    with col_d2:
+                        st.markdown("**👥 接待量**")
+                        st.write(f"总接待最小值: {selected_template.total_reception_min} 人")
+                        st.write(f"总接待目标值: {selected_template.total_reception_warning} 人")
+                    
+                    with col_d3:
+                        st.markdown("**💰 成本**")
+                        st.write(f"预估成本预警: {selected_template.cost_estimate_warning} 元")
+                        st.write(f"预估成本最大: {selected_template.cost_estimate_max} 元")
+                        st.write(f"单位成本预警: {selected_template.unit_cost_warning} 元/人")
+                        st.write(f"单位成本最大: {selected_template.unit_cost_max} 元/人")
 
 
 if __name__ == "__main__":

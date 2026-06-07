@@ -1,0 +1,38 @@
+[
+  {
+    "id": "4b2b56dc-e4b6-4b32-a67d-5a1a84916edb",
+    "name": "系统默认阈值",
+    "avg_wait_time_max": 10.0,
+    "avg_wait_time_warning": 7.0,
+    "max_wait_time_max": 30.0,
+    "max_wait_time_warning": 20.0,
+    "total_reception_min": 200.0,
+    "total_reception_warning": 250.0,
+    "cost_estimate_max": 5000.0,
+    "cost_estimate_warning": 4000.0,
+    "unit_cost_max": 20.0,
+    "unit_cost_warning": 15.0,
+    "is_default": true,
+    "created_by": "system",
+    "created_at": "2026-06-07T14:11:08.928680",
+    "department": "default"
+  },
+  {
+    "id": "4cd965dc-f7fe-40ad-a0cc-bc4c4cb181fa",
+    "name": "客服部门专用模板",
+    "avg_wait_time_max": 15.0,
+    "avg_wait_time_warning": 10.0,
+    "max_wait_time_max": 45.0,
+    "max_wait_time_warning": 30.0,
+    "total_reception_min": 150.0,
+    "total_reception_warning": 200.0,
+    "cost_estimate_max": 8000.0,
+    "cost_estimate_warning": 6000.0,
+    "unit_cost_max": 30.0,
+    "unit_cost_warning": 25.0,
+    "is_default": false,
+    "created_by": "admin",
+    "created_at": "2026-06-07T14:11:08.928680",
+    "department": "客服部"
+  }
+]

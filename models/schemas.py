@@ -27,6 +27,45 @@ class SimulationParams:
 
 
 @dataclass
+class ThresholdConfig:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = "默认阈值模板"
+    avg_wait_time_max: float = 10.0
+    avg_wait_time_warning: float = 7.0
+    max_wait_time_max: float = 30.0
+    max_wait_time_warning: float = 20.0
+    total_reception_min: float = 200.0
+    total_reception_warning: float = 250.0
+    cost_estimate_max: float = 5000.0
+    cost_estimate_warning: float = 4000.0
+    unit_cost_max: float = 20.0
+    unit_cost_warning: float = 15.0
+    is_default: bool = False
+    created_by: str = "admin"
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    department: str = "default"
+
+
+@dataclass
+class ThresholdEvaluation:
+    avg_wait_time_status: str = "达标"
+    avg_wait_time_reason: str = ""
+    max_wait_time_status: str = "达标"
+    max_wait_time_reason: str = ""
+    total_reception_status: str = "达标"
+    total_reception_reason: str = ""
+    cost_estimate_status: str = "达标"
+    cost_estimate_reason: str = ""
+    unit_cost_status: str = "达标"
+    unit_cost_reason: str = ""
+    overall_status: str = "达标"
+    overall_score: float = 100.0
+    key_reasons: List[str] = field(default_factory=list)
+    recommendation_priority: int = 1
+    conclusion_summary: str = ""
+
+
+@dataclass
 class SimulationResult:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     params_id: str = ""
@@ -43,6 +82,9 @@ class SimulationResult:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     created_by: str = ""
     department: str = "default"
+    threshold_template_id: str = ""
+    threshold_template_name: str = ""
+    threshold_evaluation: Optional[ThresholdEvaluation] = None
 
 
 @dataclass
@@ -74,6 +116,8 @@ class ReviewComparisonItem:
     unit_cost_change_rate: float = 0.0
     conclusion: str = ""
     score: float = 0.0
+    threshold_evaluation: Optional[ThresholdEvaluation] = None
+    threshold_conclusion: str = ""
 
 
 @dataclass
@@ -103,7 +147,7 @@ ROLES = {
 }
 
 ROLE_PERMISSIONS = {
-    "admin": ["upload_schedule", "simulate", "view_reports", "export", "manage_users", "manage_baseline", "manage_review", "view_all_reviews", "create_review", "set_own_baseline"],
-    "user": ["simulate", "view_reports", "export", "create_review", "view_own_reviews", "set_own_baseline"],
-    "auditor": ["view_reports", "view_all_reviews", "view_baseline"]
+    "admin": ["upload_schedule", "simulate", "view_reports", "export", "manage_users", "manage_baseline", "manage_review", "view_all_reviews", "create_review", "set_own_baseline", "manage_threshold_templates", "view_threshold_templates", "apply_threshold_template"],
+    "user": ["simulate", "view_reports", "export", "create_review", "view_own_reviews", "set_own_baseline", "view_threshold_templates", "apply_threshold_template"],
+    "auditor": ["view_reports", "view_all_reviews", "view_baseline", "view_threshold_templates", "export"]
 }

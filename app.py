@@ -81,7 +81,10 @@ def show_main_content(auth_manager: AuthManager):
             "create_review": "✍️ 创建复盘",
             "view_own_reviews": "👁️ 查看自己的复盘",
             "set_own_baseline": "🎯 设置自己的基线",
-            "view_baseline": "👁️ 查看基线方案"
+            "view_baseline": "👁️ 查看基线方案",
+            "manage_threshold_templates": "⚙️ 管理阈值模板",
+            "view_threshold_templates": "👁️ 查看阈值模板",
+            "apply_threshold_template": "🎯 应用阈值模板"
         }
         for p in perms:
             st.write(f"- {perm_map.get(p, p)}")

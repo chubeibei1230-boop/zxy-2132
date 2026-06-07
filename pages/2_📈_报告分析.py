@@ -4,16 +4,20 @@ import os
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.simulation import compare_results
+from core.simulation import compare_results, calculate_unit_cost
 from data.persistence import (
     load_simulation_results,
     load_simulation_params,
     export_results_to_csv,
     export_detailed_results,
-    ensure_dirs
+    ensure_dirs,
+    load_threshold_templates,
+    get_threshold_template_by_id,
+    get_default_threshold_template
 )
 
 
@@ -52,19 +56,88 @@ def main():
         st.info("📭 暂无模拟结果数据。请先到「模拟面板」运行模拟。")
         return
     
+    st.subheader("🔍 筛选条件")
+    
+    col_filter1, col_filter2, col_filter3, col_filter4 = st.columns(4)
+    
+    with col_filter1:
+        status_options = ["全部", "达标", "预警", "未达标", "未评估"]
+        status_filter = st.selectbox("按达标状态筛选", options=status_options)
+    
+    with col_filter2:
+        departments = sorted(list(set([r.department for r in results if r.department])))
+        departments = ["全部"] + departments
+        dept_filter = st.selectbox("按部门筛选", options=departments)
+    
+    with col_filter3:
+        creators = sorted(list(set([r.created_by for r in results if r.created_by])))
+        creators = ["全部"] + creators
+        creator_filter = st.selectbox("按创建人筛选", options=creators)
+    
+    with col_filter4:
+        date_options = ["全部", "最近7天", "最近30天", "最近90天"]
+        date_filter = st.selectbox("按时间范围筛选", options=date_options)
+    
+    filtered_results = results.copy()
+    
+    if status_filter != "全部":
+        if status_filter == "未评估":
+            filtered_results = [r for r in filtered_results if r.threshold_evaluation is None]
+        else:
+            filtered_results = [
+                r for r in filtered_results
+                if r.threshold_evaluation and r.threshold_evaluation.overall_status == status_filter
+            ]
+    
+    if dept_filter != "全部":
+        filtered_results = [r for r in filtered_results if r.department == dept_filter]
+    
+    if creator_filter != "全部":
+        filtered_results = [r for r in filtered_results if r.created_by == creator_filter]
+    
+    if date_filter != "全部":
+        days_map = {"最近7天": 7, "最近30天": 30, "最近90天": 90}
+        days = days_map.get(date_filter, 0)
+        if days > 0:
+            cutoff = datetime.now() - timedelta(days=days)
+            filtered_results = [
+                r for r in filtered_results
+                if r.created_at and datetime.fromisoformat(r.created_at) >= cutoff
+            ]
+    
+    if not filtered_results:
+        st.info("📭 没有符合筛选条件的模拟结果。")
+        return
+    
+    st.markdown(f"共找到 **{len(filtered_results)}** 条符合条件的记录")
+    
     st.subheader("📋 历史模拟结果列表")
     
+    status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+    
     result_items = []
-    for i, r in enumerate(results):
+    for i, r in enumerate(filtered_results):
         try:
+            status_display = "-"
+            score_display = "-"
+            if r.threshold_evaluation:
+                status = r.threshold_evaluation.overall_status
+                status_display = f"{status_colors.get(status, '⚪')} {status}"
+                score_display = f"{r.threshold_evaluation.overall_score:.1f}"
+            
             result_items.append({
                 "index": i,
                 "name": r.params_name,
                 "created_at": r.created_at[:19] if r.created_at else "",
+                "created_by": r.created_by or "-",
+                "department": r.department or "-",
                 "avg_wait": round(r.avg_wait_time, 2) if r.avg_wait_time else 0,
                 "max_wait": round(r.max_wait_time, 2) if r.max_wait_time else 0,
                 "total_recep": round(r.total_reception, 2) if r.total_reception else 0,
-                "cost": round(r.cost_estimate, 2) if r.cost_estimate else 0
+                "cost": round(r.cost_estimate, 2) if r.cost_estimate else 0,
+                "status": status_display,
+                "score": score_display,
+                "threshold_name": r.threshold_template_name or "-"
             })
         except Exception:
             continue
@@ -74,7 +147,11 @@ def main():
         return
     
     df_results = pd.DataFrame(result_items)
-    df_results.columns = ["序号", "方案名称", "创建时间", "平均等待(分)", "最大等待(分)", "总接待量", "预估成本(元)"]
+    df_results.columns = [
+        "序号", "方案名称", "创建时间", "创建人", "部门",
+        "平均等待(分)", "最大等待(分)", "总接待量", "预估成本(元)",
+        "评估状态", "评估评分", "使用阈值模板"
+    ]
     
     event = st.dataframe(
         df_results,
@@ -92,11 +169,11 @@ def main():
     
     with col1:
         if st.button("📊 分析选中方案", use_container_width=True, disabled=len(selected_indices) == 0):
-            st.session_state.selected_results = [results[i] for i in selected_indices]
+            st.session_state.selected_results = [filtered_results[i] for i in selected_indices]
     
     with col2:
         if st.button("📤 导出选中方案CSV", use_container_width=True, disabled=len(selected_indices) == 0):
-            selected_results = [results[i] for i in selected_indices]
+            selected_results = [filtered_results[i] for i in selected_indices]
             filepath = export_results_to_csv(selected_results)
             if filepath:
                 with open(filepath, "r", encoding="utf-8-sig") as f:
@@ -111,16 +188,35 @@ def main():
     if "selected_results" in st.session_state and st.session_state.selected_results:
         st.markdown("---")
         show_analysis(st.session_state.selected_results)
-    elif len(results) >= 2:
+    elif len(filtered_results) >= 2:
         st.markdown("---")
         st.info("💡 提示：选择2个以上方案进行对比分析")
-        show_analysis(results[-2:])
+        show_analysis(filtered_results[-2:])
 
 
 def show_analysis(results):
     st.subheader("📊 方案分析详情")
     
     comparison = compare_results(results)
+    
+    has_evaluation = any(r.threshold_evaluation is not None for r in results)
+    
+    if has_evaluation:
+        st.subheader("🎯 目标完成情况概览")
+        status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+        
+        overview_cols = st.columns(len(results))
+        for i, result in enumerate(results):
+            with overview_cols[i]:
+                if result.threshold_evaluation:
+                    eval_obj = result.threshold_evaluation
+                    st.metric(
+                        label=result.params_name,
+                        value=f"{status_colors.get(eval_obj.overall_status, '⚪')} {eval_obj.overall_status}",
+                        delta=f"评分: {eval_obj.overall_score:.1f}"
+                    )
+                    if result.threshold_template_name:
+                        st.caption(f"阈值模板: {result.threshold_template_name}")
     
     metrics_col = st.columns(4)
     metrics = [
@@ -140,7 +236,7 @@ def show_analysis(results):
     
     st.markdown("---")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["等待时长趋势", "接待量趋势", "成本效益分析", "详细数据"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["等待时长趋势", "接待量趋势", "成本效益分析", "阈值评估详情", "详细数据"])
     
     colors = px.colors.qualitative.Plotly
     
@@ -239,16 +335,64 @@ def show_analysis(results):
             st.plotly_chart(fig, use_container_width=True)
     
     with tab4:
+        st.subheader("🎯 阈值评估详情")
+        if not has_evaluation:
+            st.info("📭 选中的方案暂无阈值评估数据")
+        else:
+            status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+            for i, result in enumerate(results):
+                if result.threshold_evaluation:
+                    eval_obj = result.threshold_evaluation
+                    with st.expander(f"📊 {result.params_name} - {status_colors.get(eval_obj.overall_status, '⚪')} {eval_obj.overall_status} (评分: {eval_obj.overall_score:.1f})", expanded=True):
+                        col_metrics = st.columns(5)
+                        
+                        metrics_config = [
+                            ("平均等待时长", eval_obj.avg_wait_time_status, eval_obj.avg_wait_time_reason),
+                            ("最大等待时长", eval_obj.max_wait_time_status, eval_obj.max_wait_time_reason),
+                            ("总接待量", eval_obj.total_reception_status, eval_obj.total_reception_reason),
+                            ("预估成本", eval_obj.cost_estimate_status, eval_obj.cost_estimate_reason),
+                            ("单位成本", eval_obj.unit_cost_status, eval_obj.unit_cost_reason)
+                        ]
+                        
+                        for j, (metric_name, status, reason) in enumerate(metrics_config):
+                            with col_metrics[j]:
+                                color = status_colors.get(status, "⚪")
+                                st.markdown(f"**{metric_name}**")
+                                st.markdown(f"{color} **{status}**")
+                                st.caption(reason)
+                        
+                        st.markdown("---")
+                        st.markdown(f"**📝 综合结论**: {eval_obj.conclusion_summary}")
+                        st.markdown("**🔑 关键问题**:")
+                        for idx, reason in enumerate(eval_obj.key_reasons, 1):
+                            st.write(f"{idx}. {reason}")
+                        st.markdown(f"**⭐ 推荐优先级**: {eval_obj.recommendation_priority}")
+    
+    with tab5:
         st.subheader("📋 详细数据对比")
         
-        detail_df = pd.DataFrame({
+        detail_data = {
             "方案名称": comparison["names"],
             "平均等待时长(分钟)": [round(x, 2) for x in comparison["avg_wait_times"]],
             "最大等待时长(分钟)": [round(x, 2) for x in comparison["max_wait_times"]],
             "总接待量": [round(x, 2) for x in comparison["total_receptions"]],
             "预估成本(元)": [round(x, 2) for x in comparison["cost_estimates"]],
             "单位成本(元/人)": [round(c / t if t > 0 else 0, 2) for c, t in zip(comparison["cost_estimates"], comparison["total_receptions"])]
-        })
+        }
+        
+        if has_evaluation:
+            status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+            detail_data["评估状态"] = []
+            detail_data["评估评分"] = []
+            for r in results:
+                if r.threshold_evaluation:
+                    detail_data["评估状态"].append(f"{status_colors.get(r.threshold_evaluation.overall_status, '⚪')} {r.threshold_evaluation.overall_status}")
+                    detail_data["评估评分"].append(round(r.threshold_evaluation.overall_score, 1))
+                else:
+                    detail_data["评估状态"].append("-")
+                    detail_data["评估评分"].append("-")
+        
+        detail_df = pd.DataFrame(detail_data)
         st.dataframe(detail_df, use_container_width=True, hide_index=True)
         
         st.subheader("📥 单方案详细数据导出")

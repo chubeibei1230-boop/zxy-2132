@@ -1,6 +1,6 @@
 import numpy as np
 from typing import List, Tuple, Optional, Dict
-from models.schemas import SimulationParams, SimulationResult, ReviewComparisonItem
+from models.schemas import SimulationParams, SimulationResult, ReviewComparisonItem, ThresholdConfig, ThresholdEvaluation
 
 
 def moving_average(data: List[float], window: int = 5) -> List[float]:
@@ -268,3 +268,210 @@ def perform_review_comparison(
     
     items.sort(key=lambda x: x.score, reverse=True)
     return items
+
+
+def evaluate_threshold(
+    result: SimulationResult,
+    threshold: ThresholdConfig
+) -> ThresholdEvaluation:
+    unit_cost = calculate_unit_cost(result)
+    
+    evaluation = ThresholdEvaluation()
+    
+    status_priority = {"未达标": 0, "预警": 1, "达标": 2}
+    status_scores = {"未达标": 0, "预警": 50, "达标": 100}
+    
+    if result.avg_wait_time <= threshold.avg_wait_time_warning:
+        evaluation.avg_wait_time_status = "达标"
+        evaluation.avg_wait_time_reason = f"平均等待{result.avg_wait_time:.2f}分钟 ≤ 预警值{threshold.avg_wait_time_warning}分钟"
+    elif result.avg_wait_time <= threshold.avg_wait_time_max:
+        evaluation.avg_wait_time_status = "预警"
+        evaluation.avg_wait_time_reason = f"平均等待{result.avg_wait_time:.2f}分钟 超过预警值{threshold.avg_wait_time_warning}分钟"
+    else:
+        evaluation.avg_wait_time_status = "未达标"
+        evaluation.avg_wait_time_reason = f"平均等待{result.avg_wait_time:.2f}分钟 超过最大值{threshold.avg_wait_time_max}分钟"
+    
+    if result.max_wait_time <= threshold.max_wait_time_warning:
+        evaluation.max_wait_time_status = "达标"
+        evaluation.max_wait_time_reason = f"最大等待{result.max_wait_time:.2f}分钟 ≤ 预警值{threshold.max_wait_time_warning}分钟"
+    elif result.max_wait_time <= threshold.max_wait_time_max:
+        evaluation.max_wait_time_status = "预警"
+        evaluation.max_wait_time_reason = f"最大等待{result.max_wait_time:.2f}分钟 超过预警值{threshold.max_wait_time_warning}分钟"
+    else:
+        evaluation.max_wait_time_status = "未达标"
+        evaluation.max_wait_time_reason = f"最大等待{result.max_wait_time:.2f}分钟 超过最大值{threshold.max_wait_time_max}分钟"
+    
+    if result.total_reception >= threshold.total_reception_warning:
+        evaluation.total_reception_status = "达标"
+        evaluation.total_reception_reason = f"总接待量{result.total_reception:.0f}人 ≥ 目标值{threshold.total_reception_warning}人"
+    elif result.total_reception >= threshold.total_reception_min:
+        evaluation.total_reception_status = "预警"
+        evaluation.total_reception_reason = f"总接待量{result.total_reception:.0f}人 低于目标值{threshold.total_reception_warning}人"
+    else:
+        evaluation.total_reception_status = "未达标"
+        evaluation.total_reception_reason = f"总接待量{result.total_reception:.0f}人 低于最小值{threshold.total_reception_min}人"
+    
+    if result.cost_estimate <= threshold.cost_estimate_warning:
+        evaluation.cost_estimate_status = "达标"
+        evaluation.cost_estimate_reason = f"预估成本{result.cost_estimate:.2f}元 ≤ 预警值{threshold.cost_estimate_warning}元"
+    elif result.cost_estimate <= threshold.cost_estimate_max:
+        evaluation.cost_estimate_status = "预警"
+        evaluation.cost_estimate_reason = f"预估成本{result.cost_estimate:.2f}元 超过预警值{threshold.cost_estimate_warning}元"
+    else:
+        evaluation.cost_estimate_status = "未达标"
+        evaluation.cost_estimate_reason = f"预估成本{result.cost_estimate:.2f}元 超过最大值{threshold.cost_estimate_max}元"
+    
+    if unit_cost <= threshold.unit_cost_warning:
+        evaluation.unit_cost_status = "达标"
+        evaluation.unit_cost_reason = f"单位成本{unit_cost:.2f}元/人 ≤ 预警值{threshold.unit_cost_warning}元/人"
+    elif unit_cost <= threshold.unit_cost_max:
+        evaluation.unit_cost_status = "预警"
+        evaluation.unit_cost_reason = f"单位成本{unit_cost:.2f}元/人 超过预警值{threshold.unit_cost_warning}元/人"
+    else:
+        evaluation.unit_cost_status = "未达标"
+        evaluation.unit_cost_reason = f"单位成本{unit_cost:.2f}元/人 超过最大值{threshold.unit_cost_max}元/人"
+    
+    all_statuses = [
+        evaluation.avg_wait_time_status,
+        evaluation.max_wait_time_status,
+        evaluation.total_reception_status,
+        evaluation.cost_estimate_status,
+        evaluation.unit_cost_status
+    ]
+    
+    if "未达标" in all_statuses:
+        evaluation.overall_status = "未达标"
+    elif "预警" in all_statuses:
+        evaluation.overall_status = "预警"
+    else:
+        evaluation.overall_status = "达标"
+    
+    weights = {
+        "avg_wait_time": 0.25,
+        "max_wait_time": 0.20,
+        "total_reception": 0.25,
+        "cost_estimate": 0.15,
+        "unit_cost": 0.15
+    }
+    
+    evaluation.overall_score = (
+        status_scores[evaluation.avg_wait_time_status] * weights["avg_wait_time"] +
+        status_scores[evaluation.max_wait_time_status] * weights["max_wait_time"] +
+        status_scores[evaluation.total_reception_status] * weights["total_reception"] +
+        status_scores[evaluation.cost_estimate_status] * weights["cost_estimate"] +
+        status_scores[evaluation.unit_cost_status] * weights["unit_cost"]
+    )
+    
+    key_reasons = []
+    if evaluation.avg_wait_time_status != "达标":
+        key_reasons.append(evaluation.avg_wait_time_reason)
+    if evaluation.max_wait_time_status != "达标":
+        key_reasons.append(evaluation.max_wait_time_reason)
+    if evaluation.total_reception_status != "达标":
+        key_reasons.append(evaluation.total_reception_reason)
+    if evaluation.cost_estimate_status != "达标":
+        key_reasons.append(evaluation.cost_estimate_reason)
+    if evaluation.unit_cost_status != "达标":
+        key_reasons.append(evaluation.unit_cost_reason)
+    
+    if not key_reasons:
+        key_reasons = ["所有指标均达标"]
+    evaluation.key_reasons = key_reasons
+    
+    status_rank = {"达标": 3, "预警": 2, "未达标": 1}
+    evaluation.recommendation_priority = status_rank[evaluation.overall_status]
+    
+    evaluation.conclusion_summary = generate_threshold_conclusion(evaluation, result, threshold)
+    
+    return evaluation
+
+
+def generate_threshold_conclusion(
+    evaluation: ThresholdEvaluation,
+    result: SimulationResult,
+    threshold: ThresholdConfig
+) -> str:
+    conclusions = []
+    
+    if evaluation.overall_status == "达标":
+        return "方案各项指标均达到目标要求，表现优秀"
+    
+    if evaluation.avg_wait_time_status == "未达标":
+        conclusions.append("平均等待时长超标")
+    elif evaluation.avg_wait_time_status == "预警":
+        conclusions.append("平均等待时长偏高")
+    
+    if evaluation.max_wait_time_status == "未达标":
+        conclusions.append("最大等待时长超标")
+    elif evaluation.max_wait_time_status == "预警":
+        conclusions.append("最大等待时长偏高")
+    
+    if evaluation.total_reception_status == "未达标":
+        conclusions.append("接待量不足")
+    elif evaluation.total_reception_status == "预警":
+        conclusions.append("接待量偏低")
+    
+    if evaluation.cost_estimate_status == "未达标":
+        conclusions.append("成本超预算")
+    elif evaluation.cost_estimate_status == "预警":
+        conclusions.append("成本偏高")
+    
+    if evaluation.unit_cost_status == "未达标":
+        conclusions.append("单位成本过高")
+    elif evaluation.unit_cost_status == "预警":
+        conclusions.append("单位成本偏高")
+    
+    return "；".join(conclusions) if conclusions else "方案基本达标"
+
+
+def generate_review_threshold_conclusion(
+    item: ReviewComparisonItem,
+    evaluation: ThresholdEvaluation
+) -> str:
+    parts = []
+    
+    base_conclusion = item.conclusion
+    
+    if base_conclusion == "更优" and evaluation.overall_status == "达标":
+        parts.append("相比基线更优且全部达标")
+    elif base_conclusion == "更优" and evaluation.overall_status == "预警":
+        parts.append("相比基线更优但存在预警指标")
+    elif base_conclusion == "更优" and evaluation.overall_status == "未达标":
+        parts.append("相比基线更优但关键指标未达标")
+    elif base_conclusion == "持平" and evaluation.overall_status == "达标":
+        parts.append("与基线持平且全部达标")
+    elif base_conclusion == "持平" and evaluation.overall_status == "预警":
+        parts.append("与基线持平但存在预警")
+    elif base_conclusion == "持平" and evaluation.overall_status == "未达标":
+        parts.append("与基线持平但关键指标未达标")
+    elif base_conclusion == "退化" and evaluation.overall_status == "达标":
+        parts.append("相比基线略差但仍达标")
+    elif base_conclusion == "退化" and evaluation.overall_status == "预警":
+        parts.append("相比基线退化且存在预警")
+    elif base_conclusion == "退化" and evaluation.overall_status == "未达标":
+        parts.append("相比基线退化且关键指标未达标")
+    
+    if evaluation.avg_wait_time_status == "未达标":
+        parts.append("等待时长超标")
+    elif evaluation.avg_wait_time_status == "预警" and evaluation.overall_status != "未达标":
+        parts.append("等待时长需关注")
+    
+    if evaluation.total_reception_status == "未达标":
+        parts.append("接待量不足")
+    elif evaluation.total_reception_status == "预警" and evaluation.overall_status != "未达标":
+        parts.append("接待量偏低")
+    
+    if evaluation.cost_estimate_status == "未达标":
+        parts.append("成本超阈值")
+    elif evaluation.cost_estimate_status == "预警" and evaluation.overall_status != "未达标":
+        parts.append("成本偏高")
+    
+    return "，".join(parts) if parts else "方案综合评估正常"
+
+
+def get_default_threshold_config() -> ThresholdConfig:
+    return ThresholdConfig(
+        name="系统默认阈值",
+        is_default=True,
+        created_by="system"
+    )

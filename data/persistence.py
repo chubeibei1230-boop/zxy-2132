@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from models.schemas import (
     ScheduleRecord, SimulationParams, SimulationResult,
-    BaselineScheme, ReviewComparisonItem, ReviewRecord
+    BaselineScheme, ReviewComparisonItem, ReviewRecord,
+    ThresholdConfig, ThresholdEvaluation
 )
 
 
@@ -120,6 +121,53 @@ def save_simulation_params(params_list: List[SimulationParams], filepath: Option
         return False
 
 
+def dict_to_threshold_evaluation(data: Optional[Dict]) -> Optional[ThresholdEvaluation]:
+    if data is None:
+        return None
+    try:
+        return ThresholdEvaluation(
+            avg_wait_time_status=data.get("avg_wait_time_status", "达标"),
+            avg_wait_time_reason=data.get("avg_wait_time_reason", ""),
+            max_wait_time_status=data.get("max_wait_time_status", "达标"),
+            max_wait_time_reason=data.get("max_wait_time_reason", ""),
+            total_reception_status=data.get("total_reception_status", "达标"),
+            total_reception_reason=data.get("total_reception_reason", ""),
+            cost_estimate_status=data.get("cost_estimate_status", "达标"),
+            cost_estimate_reason=data.get("cost_estimate_reason", ""),
+            unit_cost_status=data.get("unit_cost_status", "达标"),
+            unit_cost_reason=data.get("unit_cost_reason", ""),
+            overall_status=data.get("overall_status", "达标"),
+            overall_score=float(data.get("overall_score", 100.0)),
+            key_reasons=data.get("key_reasons", []),
+            recommendation_priority=int(data.get("recommendation_priority", 1)),
+            conclusion_summary=data.get("conclusion_summary", "")
+        )
+    except Exception:
+        return None
+
+
+def threshold_evaluation_to_dict(evaluation: Optional[ThresholdEvaluation]) -> Optional[Dict]:
+    if evaluation is None:
+        return None
+    return {
+        "avg_wait_time_status": evaluation.avg_wait_time_status,
+        "avg_wait_time_reason": evaluation.avg_wait_time_reason,
+        "max_wait_time_status": evaluation.max_wait_time_status,
+        "max_wait_time_reason": evaluation.max_wait_time_reason,
+        "total_reception_status": evaluation.total_reception_status,
+        "total_reception_reason": evaluation.total_reception_reason,
+        "cost_estimate_status": evaluation.cost_estimate_status,
+        "cost_estimate_reason": evaluation.cost_estimate_reason,
+        "unit_cost_status": evaluation.unit_cost_status,
+        "unit_cost_reason": evaluation.unit_cost_reason,
+        "overall_status": evaluation.overall_status,
+        "overall_score": evaluation.overall_score,
+        "key_reasons": evaluation.key_reasons,
+        "recommendation_priority": evaluation.recommendation_priority,
+        "conclusion_summary": evaluation.conclusion_summary
+    }
+
+
 def load_simulation_results(filepath: Optional[str] = None) -> List[SimulationResult]:
     if filepath is None:
         filepath = os.path.join(DATA_DIR, "simulation_results.json")
@@ -133,6 +181,7 @@ def load_simulation_results(filepath: Optional[str] = None) -> List[SimulationRe
         
         results = []
         for data in data_list:
+            threshold_eval_data = data.get("threshold_evaluation")
             result = SimulationResult(
                 id=data.get("id", ""),
                 params_id=data.get("params_id", ""),
@@ -148,7 +197,10 @@ def load_simulation_results(filepath: Optional[str] = None) -> List[SimulationRe
                 reception_ma=data.get("reception_ma", []),
                 created_at=data.get("created_at", ""),
                 created_by=data.get("created_by", ""),
-                department=data.get("department", "default")
+                department=data.get("department", "default"),
+                threshold_template_id=data.get("threshold_template_id", ""),
+                threshold_template_name=data.get("threshold_template_name", ""),
+                threshold_evaluation=dict_to_threshold_evaluation(threshold_eval_data)
             )
             results.append(result)
         return results
@@ -180,7 +232,10 @@ def save_simulation_results(results: List[SimulationResult], filepath: Optional[
                 "reception_ma": r.reception_ma,
                 "created_at": r.created_at,
                 "created_by": r.created_by,
-                "department": r.department
+                "department": r.department,
+                "threshold_template_id": r.threshold_template_id,
+                "threshold_template_name": r.threshold_template_name,
+                "threshold_evaluation": threshold_evaluation_to_dict(r.threshold_evaluation)
             })
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -381,7 +436,9 @@ def load_review_records(filepath: Optional[str] = None) -> List[ReviewRecord]:
                     unit_cost_diff=float(item_data.get("unit_cost_diff", 0.0)),
                     unit_cost_change_rate=float(item_data.get("unit_cost_change_rate", 0.0)),
                     conclusion=item_data.get("conclusion", ""),
-                    score=float(item_data.get("score", 0.0))
+                    score=float(item_data.get("score", 0.0)),
+                    threshold_evaluation=dict_to_threshold_evaluation(item_data.get("threshold_evaluation")),
+                    threshold_conclusion=item_data.get("threshold_conclusion", "")
                 )
                 items.append(item)
             
@@ -427,7 +484,9 @@ def save_review_records(records: List[ReviewRecord], filepath: Optional[str] = N
                     "unit_cost_diff": item.unit_cost_diff,
                     "unit_cost_change_rate": item.unit_cost_change_rate,
                     "conclusion": item.conclusion,
-                    "score": item.score
+                    "score": item.score,
+                    "threshold_evaluation": threshold_evaluation_to_dict(item.threshold_evaluation),
+                    "threshold_conclusion": item.threshold_conclusion
                 })
             data.append({
                 "id": r.id,
@@ -446,6 +505,134 @@ def save_review_records(records: List[ReviewRecord], filepath: Optional[str] = N
     except Exception as e:
         print(f"保存复盘记录失败: {e}")
         return False
+
+
+def load_threshold_templates(filepath: Optional[str] = None) -> List[ThresholdConfig]:
+    if filepath is None:
+        filepath = os.path.join(DATA_DIR, "threshold_templates.json")
+    
+    if not os.path.exists(filepath):
+        default_template = ThresholdConfig(
+            name="系统默认阈值",
+            is_default=True,
+            created_by="system"
+        )
+        save_threshold_templates([default_template])
+        return [default_template]
+    
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data_list = json.load(f)
+        
+        templates = []
+        for data in data_list:
+            template = ThresholdConfig(
+                id=data.get("id", ""),
+                name=data.get("name", ""),
+                avg_wait_time_max=float(data.get("avg_wait_time_max", 10.0)),
+                avg_wait_time_warning=float(data.get("avg_wait_time_warning", 7.0)),
+                max_wait_time_max=float(data.get("max_wait_time_max", 30.0)),
+                max_wait_time_warning=float(data.get("max_wait_time_warning", 20.0)),
+                total_reception_min=float(data.get("total_reception_min", 200.0)),
+                total_reception_warning=float(data.get("total_reception_warning", 250.0)),
+                cost_estimate_max=float(data.get("cost_estimate_max", 5000.0)),
+                cost_estimate_warning=float(data.get("cost_estimate_warning", 4000.0)),
+                unit_cost_max=float(data.get("unit_cost_max", 20.0)),
+                unit_cost_warning=float(data.get("unit_cost_warning", 15.0)),
+                is_default=data.get("is_default", False),
+                created_by=data.get("created_by", ""),
+                created_at=data.get("created_at", ""),
+                department=data.get("department", "default")
+            )
+            templates.append(template)
+        return templates
+    except Exception as e:
+        print(f"加载阈值模板失败: {e}")
+        return []
+
+
+def save_threshold_templates(templates: List[ThresholdConfig], filepath: Optional[str] = None) -> bool:
+    ensure_dirs()
+    if filepath is None:
+        filepath = os.path.join(DATA_DIR, "threshold_templates.json")
+    
+    try:
+        data = []
+        for t in templates:
+            data.append({
+                "id": t.id,
+                "name": t.name,
+                "avg_wait_time_max": t.avg_wait_time_max,
+                "avg_wait_time_warning": t.avg_wait_time_warning,
+                "max_wait_time_max": t.max_wait_time_max,
+                "max_wait_time_warning": t.max_wait_time_warning,
+                "total_reception_min": t.total_reception_min,
+                "total_reception_warning": t.total_reception_warning,
+                "cost_estimate_max": t.cost_estimate_max,
+                "cost_estimate_warning": t.cost_estimate_warning,
+                "unit_cost_max": t.unit_cost_max,
+                "unit_cost_warning": t.unit_cost_warning,
+                "is_default": t.is_default,
+                "created_by": t.created_by,
+                "created_at": t.created_at,
+                "department": t.department
+            })
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"保存阈值模板失败: {e}")
+        return False
+
+
+def add_threshold_template(template: ThresholdConfig) -> bool:
+    templates = load_threshold_templates()
+    if template.is_default:
+        for t in templates:
+            t.is_default = False
+    templates.append(template)
+    return save_threshold_templates(templates)
+
+
+def update_threshold_template(template_id: str, **kwargs) -> bool:
+    templates = load_threshold_templates()
+    for i, t in enumerate(templates):
+        if t.id == template_id:
+            if kwargs.get("is_default", False):
+                for other in templates:
+                    other.is_default = False
+            for key, value in kwargs.items():
+                if hasattr(t, key):
+                    setattr(t, key, value)
+            templates[i] = t
+            return save_threshold_templates(templates)
+    return False
+
+
+def delete_threshold_template(template_id: str) -> bool:
+    templates = load_threshold_templates()
+    templates = [t for t in templates if t.id != template_id]
+    if templates and not any(t.is_default for t in templates):
+        templates[0].is_default = True
+    return save_threshold_templates(templates)
+
+
+def get_default_threshold_template() -> Optional[ThresholdConfig]:
+    templates = load_threshold_templates()
+    for t in templates:
+        if t.is_default:
+            return t
+    if templates:
+        return templates[0]
+    return None
+
+
+def get_threshold_template_by_id(template_id: str) -> Optional[ThresholdConfig]:
+    templates = load_threshold_templates()
+    for t in templates:
+        if t.id == template_id:
+            return t
+    return None
 
 
 def add_review_record(record: ReviewRecord) -> bool:

@@ -7,8 +7,8 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.schemas import SimulationParams
-from core.simulation import run_simulation, compare_results
+from models.schemas import SimulationParams, ThresholdConfig
+from core.simulation import run_simulation, compare_results, evaluate_threshold, calculate_unit_cost
 from data.persistence import (
     load_schedule_data,
     load_simulation_params,
@@ -17,7 +17,10 @@ from data.persistence import (
     save_simulation_results,
     export_results_to_csv,
     export_detailed_results,
-    ensure_dirs
+    ensure_dirs,
+    load_threshold_templates,
+    get_default_threshold_template,
+    get_threshold_template_by_id
 )
 
 
@@ -49,6 +52,10 @@ def main():
         st.session_state.loaded_params = None
     if "num_schemes_loaded" not in st.session_state:
         st.session_state.num_schemes_loaded = None
+    if "current_threshold" not in st.session_state:
+        default_template = get_default_threshold_template()
+        st.session_state.current_threshold = default_template
+        st.session_state.threshold_template_id = default_template.id if default_template else ""
     
     col1, col2 = st.columns([2, 1])
     
@@ -71,6 +78,156 @@ def main():
                     st.rerun()
         else:
             st.info("暂无保存的方案")
+        
+        st.markdown("---")
+        st.subheader("🎯 目标阈值设置")
+        
+        templates = load_threshold_templates()
+        template_options = [(t.id, f"{t.name} {'(默认)' if t.is_default else ''}") for t in templates]
+        template_ids = [t[0] for t in template_options]
+        template_labels = [t[1] for t in template_options]
+        
+        current_template_idx = 0
+        if st.session_state.threshold_template_id in template_ids:
+            current_template_idx = template_ids.index(st.session_state.threshold_template_id)
+        
+        selected_template_label = st.selectbox(
+            "选择阈值模板",
+            options=template_labels,
+            index=current_template_idx
+        )
+        
+        selected_template_id = template_ids[template_labels.index(selected_template_label)]
+        selected_template = get_threshold_template_by_id(selected_template_id)
+        
+        if selected_template and selected_template_id != st.session_state.threshold_template_id:
+            st.session_state.threshold_template_id = selected_template_id
+            st.session_state.current_threshold = selected_template
+            st.rerun()
+        
+        with st.expander("📊 调整阈值参数", expanded=False):
+            current_th = st.session_state.current_threshold
+            if current_th:
+                st.markdown("**⏱️ 等待时长阈值（越小越好）**")
+                col_w1, col_w2 = st.columns(2)
+                with col_w1:
+                    avg_wait_warn = st.number_input(
+                        "平均等待预警值(分钟)",
+                        min_value=0.1,
+                        max_value=120.0,
+                        value=current_th.avg_wait_time_warning,
+                        step=0.5,
+                        key="th_avg_wait_warn"
+                    )
+                with col_w2:
+                    avg_wait_max = st.number_input(
+                        "平均等待最大值(分钟)",
+                        min_value=avg_wait_warn,
+                        max_value=180.0,
+                        value=current_th.avg_wait_time_max,
+                        step=0.5,
+                        key="th_avg_wait_max"
+                    )
+                
+                col_mw1, col_mw2 = st.columns(2)
+                with col_mw1:
+                    max_wait_warn = st.number_input(
+                        "最大等待预警值(分钟)",
+                        min_value=0.1,
+                        max_value=300.0,
+                        value=current_th.max_wait_time_warning,
+                        step=1.0,
+                        key="th_max_wait_warn"
+                    )
+                with col_mw2:
+                    max_wait_max = st.number_input(
+                        "最大等待最大值(分钟)",
+                        min_value=max_wait_warn,
+                        max_value=600.0,
+                        value=current_th.max_wait_time_max,
+                        step=1.0,
+                        key="th_max_wait_max"
+                    )
+                
+                st.markdown("**👥 接待量阈值（越大越好）**")
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    total_recep_min = st.number_input(
+                        "总接待最小值(人)",
+                        min_value=1.0,
+                        max_value=2000.0,
+                        value=current_th.total_reception_min,
+                        step=10.0,
+                        key="th_total_recep_min"
+                    )
+                with col_r2:
+                    total_recep_warn = st.number_input(
+                        "总接待目标值(人)",
+                        min_value=total_recep_min,
+                        max_value=5000.0,
+                        value=current_th.total_reception_warning,
+                        step=10.0,
+                        key="th_total_recep_warn"
+                    )
+                
+                st.markdown("**💰 成本阈值（越小越好）**")
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    cost_warn = st.number_input(
+                        "预估成本预警值(元)",
+                        min_value=100.0,
+                        max_value=100000.0,
+                        value=current_th.cost_estimate_warning,
+                        step=100.0,
+                        key="th_cost_warn"
+                    )
+                with col_c2:
+                    cost_max = st.number_input(
+                        "预估成本最大值(元)",
+                        min_value=cost_warn,
+                        max_value=200000.0,
+                        value=current_th.cost_estimate_max,
+                        step=100.0,
+                        key="th_cost_max"
+                    )
+                
+                col_uc1, col_uc2 = st.columns(2)
+                with col_uc1:
+                    unit_cost_warn = st.number_input(
+                        "单位成本预警值(元/人)",
+                        min_value=0.1,
+                        max_value=500.0,
+                        value=current_th.unit_cost_warning,
+                        step=1.0,
+                        key="th_unit_cost_warn"
+                    )
+                with col_uc2:
+                    unit_cost_max = st.number_input(
+                        "单位成本最大值(元/人)",
+                        min_value=unit_cost_warn,
+                        max_value=1000.0,
+                        value=current_th.unit_cost_max,
+                        step=1.0,
+                        key="th_unit_cost_max"
+                    )
+                
+                if st.button("✅ 应用临时调整", use_container_width=True):
+                    st.session_state.current_threshold = ThresholdConfig(
+                        id="temp",
+                        name="临时调整阈值",
+                        avg_wait_time_max=avg_wait_max,
+                        avg_wait_time_warning=avg_wait_warn,
+                        max_wait_time_max=max_wait_max,
+                        max_wait_time_warning=max_wait_warn,
+                        total_reception_min=total_recep_min,
+                        total_reception_warning=total_recep_warn,
+                        cost_estimate_max=cost_max,
+                        cost_estimate_warning=cost_warn,
+                        unit_cost_max=unit_cost_max,
+                        unit_cost_warning=unit_cost_warn
+                    )
+                    st.success("已应用临时阈值调整！")
+                    st.rerun()
     
     with col1:
         st.subheader("📝 参数设置")
@@ -156,9 +313,27 @@ def run_simulations(params_list, save_to_history=False):
     schedule_data = load_schedule_data()
     staff_counts = [r.staff_count for r in schedule_data] if schedule_data else None
     
+    threshold = st.session_state.get("current_threshold")
+    threshold_template_id = st.session_state.get("threshold_template_id", "")
+    threshold_template_name = ""
+    
+    if threshold_template_id and threshold_template_id != "temp":
+        template = get_threshold_template_by_id(threshold_template_id)
+        if template:
+            threshold_template_name = template.name
+    elif threshold:
+        threshold_template_name = threshold.name
+    
     results = []
     for params in params_list:
         result = run_simulation(params, staff_counts, ma_window=10)
+        result.threshold_template_id = threshold_template_id
+        result.threshold_template_name = threshold_template_name
+        
+        if threshold:
+            evaluation = evaluate_threshold(result, threshold)
+            result.threshold_evaluation = evaluation
+        
         results.append(result)
     
     st.session_state.current_results = results
@@ -200,6 +375,27 @@ def show_results(results):
     
     comparison = compare_results(results)
     
+    has_evaluation = any(r.threshold_evaluation is not None for r in results)
+    
+    if has_evaluation:
+        st.subheader("🎯 阈值评估概览")
+        status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+        
+        eval_cols = st.columns(len(results))
+        for i, result in enumerate(results):
+            with eval_cols[i]:
+                if result.threshold_evaluation:
+                    eval_obj = result.threshold_evaluation
+                    status = eval_obj.overall_status
+                    st.metric(
+                        label=f"{result.params_name}",
+                        value=f"{status_colors.get(status, '⚪')} {status}",
+                        delta=f"评分: {eval_obj.overall_score:.1f}"
+                    )
+                    st.caption(eval_obj.conclusion_summary)
+    
+    st.markdown("---")
+    
     col1, col2, col3, col4 = st.columns(4)
     
     for i, name in enumerate(comparison["names"]):
@@ -211,16 +407,65 @@ def show_results(results):
     
     st.markdown("---")
     
-    comp_df = pd.DataFrame({
+    comp_data = {
         "方案": comparison["names"],
         "平均等待时长(分钟)": [round(x, 2) for x in comparison["avg_wait_times"]],
         "最大等待时长(分钟)": [round(x, 2) for x in comparison["max_wait_times"]],
         "总接待量": [round(x, 2) for x in comparison["total_receptions"]],
         "预估成本(元)": [round(x, 2) for x in comparison["cost_estimates"]]
-    })
+    }
+    
+    if has_evaluation:
+        status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+        comp_data["评估状态"] = []
+        comp_data["评估评分"] = []
+        comp_data["推荐优先级"] = []
+        for r in results:
+            if r.threshold_evaluation:
+                comp_data["评估状态"].append(f"{status_colors.get(r.threshold_evaluation.overall_status, '⚪')} {r.threshold_evaluation.overall_status}")
+                comp_data["评估评分"].append(round(r.threshold_evaluation.overall_score, 1))
+                comp_data["推荐优先级"].append(r.threshold_evaluation.recommendation_priority)
+            else:
+                comp_data["评估状态"].append("-")
+                comp_data["评估评分"].append("-")
+                comp_data["推荐优先级"].append("-")
+    
+    comp_df = pd.DataFrame(comp_data)
     
     st.subheader("📋 方案对比表")
     st.dataframe(comp_df, use_container_width=True, hide_index=True)
+    
+    if has_evaluation:
+        st.markdown("---")
+        st.subheader("🎯 详细阈值评估")
+        
+        for i, result in enumerate(results):
+            if result.threshold_evaluation:
+                eval_obj = result.threshold_evaluation
+                status_colors = {"达标": "🟢", "预警": "🟡", "未达标": "🔴"}
+                
+                with st.expander(f"📊 {result.params_name} - {status_colors.get(eval_obj.overall_status, '⚪')} {eval_obj.overall_status} (评分: {eval_obj.overall_score:.1f})", expanded=True):
+                    col_metrics = st.columns(5)
+                    
+                    metrics_config = [
+                        ("平均等待时长", eval_obj.avg_wait_time_status, eval_obj.avg_wait_time_reason),
+                        ("最大等待时长", eval_obj.max_wait_time_status, eval_obj.max_wait_time_reason),
+                        ("总接待量", eval_obj.total_reception_status, eval_obj.total_reception_reason),
+                        ("预估成本", eval_obj.cost_estimate_status, eval_obj.cost_estimate_reason),
+                        ("单位成本", eval_obj.unit_cost_status, eval_obj.unit_cost_reason)
+                    ]
+                    
+                    for j, (metric_name, status, reason) in enumerate(metrics_config):
+                        with col_metrics[j]:
+                            color = status_colors.get(status, "⚪")
+                            st.markdown(f"**{metric_name}**")
+                            st.markdown(f"{color} **{status}**")
+                            st.caption(reason)
+                    
+                    st.markdown("---")
+                    st.markdown("**🔑 关键问题说明**")
+                    for idx, reason in enumerate(eval_obj.key_reasons, 1):
+                        st.write(f"{idx}. {reason}")
     
     st.markdown("---")
     
