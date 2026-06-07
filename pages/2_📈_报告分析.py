@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.simulation import compare_results, calculate_unit_cost
+from core.simulation import compare_results, calculate_unit_cost, evaluate_threshold
 from data.persistence import (
     load_simulation_results,
+    save_simulation_results,
     load_simulation_params,
     export_results_to_csv,
     export_detailed_results,
@@ -58,7 +59,7 @@ def main():
     
     st.subheader("🔍 筛选条件")
     
-    col_filter1, col_filter2, col_filter3, col_filter4 = st.columns(4)
+    col_filter1, col_filter2, col_filter3, col_filter4, col_filter5 = st.columns([1, 1, 1, 1, 1.2])
     
     with col_filter1:
         status_options = ["全部", "达标", "预警", "未达标", "未评估"]
@@ -77,6 +78,18 @@ def main():
     with col_filter4:
         date_options = ["全部", "最近7天", "最近30天", "最近90天"]
         date_filter = st.selectbox("按时间范围筛选", options=date_options)
+    
+    with col_filter5:
+        templates = load_threshold_templates()
+        template_options = [(t.id, f"{t.name} {'(默认)' if t.is_default else ''}") for t in templates]
+        template_ids = [t[0] for t in template_options]
+        template_labels = [t[1] for t in template_options]
+        selected_reval_label = st.selectbox(
+            "选择阈值模板(用于重评)",
+            options=template_labels
+        )
+        selected_reval_id = template_ids[template_labels.index(selected_reval_label)]
+        selected_reval_threshold = get_threshold_template_by_id(selected_reval_id)
     
     filtered_results = results.copy()
     
@@ -165,7 +178,7 @@ def main():
     if event.selection and hasattr(event.selection, 'rows') and event.selection.rows is not None:
         selected_indices = event.selection.rows
     
-    col1, col2 = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1, 1, 1.2])
     
     with col1:
         if st.button("📊 分析选中方案", use_container_width=True, disabled=len(selected_indices) == 0):
@@ -184,6 +197,35 @@ def main():
                         mime="text/csv",
                         use_container_width=True
                     )
+    
+    with col3:
+        can_apply = check_permission("apply_threshold_template")
+        if st.button(
+            "🎯 使用选中模板重新评估",
+            use_container_width=True,
+            disabled=len(selected_indices) == 0 or not can_apply,
+            type="primary"
+        ):
+            if can_apply and selected_reval_threshold:
+                selected_results = [filtered_results[i] for i in selected_indices]
+                all_results = load_simulation_results()
+                
+                for result in selected_results:
+                    evaluation = evaluate_threshold(result, selected_reval_threshold)
+                    result.threshold_evaluation = evaluation
+                    result.threshold_template_id = selected_reval_threshold.id
+                    result.threshold_template_name = selected_reval_threshold.name
+                    
+                    for idx, r in enumerate(all_results):
+                        if r.id == result.id:
+                            all_results[idx] = result
+                            break
+                
+                save_simulation_results(all_results)
+                st.success(f"✅ 已使用模板「{selected_reval_threshold.name}」重新评估 {len(selected_results)} 个方案！")
+                st.rerun()
+            elif not can_apply:
+                st.warning("⚠️ 您没有权限应用阈值模板。")
     
     if "selected_results" in st.session_state and st.session_state.selected_results:
         st.markdown("---")

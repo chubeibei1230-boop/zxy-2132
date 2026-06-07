@@ -249,6 +249,8 @@ def main():
         
         params_list = []
         
+        department = st.text_input("部门", value="default", help="设置模拟方案的所属部门，用于筛选和统计")
+        
         for i in range(int(num_schemes)):
             with st.expander(f"方案 {i+1} 参数设置", expanded=True):
                 col_a, col_b, col_c = st.columns(3)
@@ -274,9 +276,12 @@ def main():
                     reception_capacity=int(reception),
                     service_duration=float(duration),
                     break_interval=float(break_int),
-                    peak_factor=float(peak)
+                    peak_factor=float(peak),
+                    department=department
                 )
                 params_list.append(params)
+        
+        st.session_state.current_department = department
         
         st.session_state.current_params_list = params_list
         
@@ -352,11 +357,12 @@ def get_current_username():
 def save_current_results_to_history():
     if st.session_state.current_results:
         username = get_current_username()
+        department = st.session_state.get("current_department", "default")
         for result in st.session_state.current_results:
             if not result.created_by:
                 result.created_by = username
-            if not result.department:
-                result.department = "default"
+            if not result.department or result.department == "default":
+                result.department = department
         
         all_results = load_simulation_results()
         all_results.extend(st.session_state.current_results)
