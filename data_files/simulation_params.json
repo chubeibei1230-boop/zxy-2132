@@ -1,0 +1,20 @@
+[
+  {
+    "id": "3bdf25aa-6e0a-4246-835d-c6afbdaccf73",
+    "name": "方案X",
+    "reception_capacity": 5,
+    "service_duration": 15.0,
+    "break_interval": 60.0,
+    "peak_factor": 1.5,
+    "created_at": "2026-06-07T10:48:57.233555"
+  },
+  {
+    "id": "533701f7-af6f-4080-a384-bd3d31535585",
+    "name": "方案Y",
+    "reception_capacity": 5,
+    "service_duration": 15.0,
+    "break_interval": 60.0,
+    "peak_factor": 1.5,
+    "created_at": "2026-06-07T10:48:57.233555"
+  }
+]

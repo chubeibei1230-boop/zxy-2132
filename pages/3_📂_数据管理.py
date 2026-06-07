@@ -1,4 +1,4 @@
-import streamlit as st
+.2235719965220931:ae761aa945af1c902e7ad1b1827bb5f1_6a24c05e06a80d66b8e06207.6a24dc4ec811746e90c767d7.6a24dc4bf2f40551eafd3472:Trae CN.T(2026/6/7 10:49:50)import streamlit as st
 import sys
 import os
 import pandas as pd
@@ -68,10 +68,42 @@ def manage_schedule_data():
             
             if records:
                 st.success(f"✅ 成功解析 {len(records)} 条排班记录")
+                
+                save_mode = st.radio(
+                    "保存方式",
+                    ["追加到现有数据", "覆盖现有数据", "去重后追加（按日期+时段）"],
+                    index=2
+                )
+                
                 if st.button("保存到系统", use_container_width=True):
                     existing = load_schedule_data()
-                    existing.extend(records)
-                    if save_schedule_data(existing):
+                    
+                    if save_mode == "覆盖现有数据":
+                        final_records = records
+                        st.info("已覆盖原有数据")
+                    elif save_mode == "去重后追加（按日期+时段）":
+                        existing_keys = set()
+                        for r in existing:
+                            key = (r.date, r.time_slot, r.department)
+                            existing_keys.add(key)
+                        
+                        new_records = []
+                        duplicate_count = 0
+                        for r in records:
+                            key = (r.date, r.time_slot, r.department)
+                            if key not in existing_keys:
+                                new_records.append(r)
+                                existing_keys.add(key)
+                            else:
+                                duplicate_count += 1
+                        
+                        final_records = existing + new_records
+                        if duplicate_count > 0:
+                            st.info(f"已跳过 {duplicate_count} 条重复记录（相同日期+时段+部门）")
+                    else:
+                        final_records = existing + records
+                    
+                    if save_schedule_data(final_records):
                         st.success("数据已保存！")
                         st.rerun()
                     else:

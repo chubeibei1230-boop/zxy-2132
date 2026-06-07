@@ -37,8 +37,16 @@ def main():
     
     ensure_dirs()
     
-    results = load_simulation_results()
-    params = load_simulation_params()
+    try:
+        results = load_simulation_results()
+    except Exception as e:
+        st.error(f"加载模拟结果失败: {e}")
+        results = []
+    
+    try:
+        params = load_simulation_params()
+    except Exception as e:
+        params = []
     
     if not results:
         st.info("📭 暂无模拟结果数据。请先到「模拟面板」运行模拟。")
@@ -48,15 +56,22 @@ def main():
     
     result_items = []
     for i, r in enumerate(results):
-        result_items.append({
-            "index": i,
-            "name": r.params_name,
-            "created_at": r.created_at[:19],
-            "avg_wait": round(r.avg_wait_time, 2),
-            "max_wait": round(r.max_wait_time, 2),
-            "total_recep": round(r.total_reception, 2),
-            "cost": round(r.cost_estimate, 2)
-        })
+        try:
+            result_items.append({
+                "index": i,
+                "name": r.params_name,
+                "created_at": r.created_at[:19] if r.created_at else "",
+                "avg_wait": round(r.avg_wait_time, 2) if r.avg_wait_time else 0,
+                "max_wait": round(r.max_wait_time, 2) if r.max_wait_time else 0,
+                "total_recep": round(r.total_reception, 2) if r.total_reception else 0,
+                "cost": round(r.cost_estimate, 2) if r.cost_estimate else 0
+            })
+        except Exception:
+            continue
+    
+    if not result_items:
+        st.info("📭 暂无有效的模拟结果数据。")
+        return
     
     df_results = pd.DataFrame(result_items)
     df_results.columns = ["序号", "方案名称", "创建时间", "平均等待(分)", "最大等待(分)", "总接待量", "预估成本(元)"]
@@ -70,7 +85,7 @@ def main():
     )
     
     selected_indices = []
-    if event.selection:
+    if event.selection and hasattr(event.selection, 'rows') and event.selection.rows is not None:
         selected_indices = event.selection.rows
     
     col1, col2 = st.columns([1, 1])
