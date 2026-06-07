@@ -131,6 +131,7 @@ class ReviewRecord:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     department: str = "default"
     remarks: str = ""
+    status: str = "已完成"
 
 
 @dataclass

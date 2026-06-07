@@ -451,7 +451,8 @@ def load_review_records(filepath: Optional[str] = None) -> List[ReviewRecord]:
                 created_by=data.get("created_by", ""),
                 created_at=data.get("created_at", ""),
                 department=data.get("department", "default"),
-                remarks=data.get("remarks", "")
+                remarks=data.get("remarks", ""),
+                status=data.get("status", "已完成")
             )
             records.append(record)
         return records
@@ -497,7 +498,8 @@ def save_review_records(records: List[ReviewRecord], filepath: Optional[str] = N
                 "created_by": r.created_by,
                 "created_at": r.created_at,
                 "department": r.department,
-                "remarks": r.remarks
+                "remarks": r.remarks,
+                "status": r.status
             })
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -639,6 +641,18 @@ def add_review_record(record: ReviewRecord) -> bool:
     records = load_review_records()
     records.append(record)
     return save_review_records(records)
+
+
+def update_review_record(record_id: str, **kwargs) -> bool:
+    records = load_review_records()
+    for i, r in enumerate(records):
+        if r.id == record_id:
+            for key, value in kwargs.items():
+                if hasattr(r, key):
+                    setattr(r, key, value)
+            records[i] = r
+            return save_review_records(records)
+    return False
 
 
 def delete_review_record(record_id: str) -> bool:
