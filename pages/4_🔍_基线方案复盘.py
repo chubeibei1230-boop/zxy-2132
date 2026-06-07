@@ -106,9 +106,11 @@ def manage_baseline_schemes():
         all_results = []
     
     try:
-        baselines = load_baseline_schemes()
+        all_baselines = load_baseline_schemes()
+        baselines = all_baselines.copy()
     except Exception as e:
         st.error(f"加载基线方案失败: {e}")
+        all_baselines = []
         baselines = []
     
     if not can_view_all:
@@ -151,18 +153,39 @@ def manage_baseline_schemes():
                 placeholder="描述该基线方案的背景和参考价值..."
             )
             
-            duplicate_names = [b.name for b in baselines if b.name == baseline_name and baseline_name]
-            
-            if duplicate_names:
-                st.warning(f"⚠️ 已存在同名基线方案：{baseline_name}，建议使用不同名称。")
-            
             department = st.text_input("部门", value="default")
             
-            if st.button("✅ 设为基线方案", use_container_width=True, disabled=not selected_result or not baseline_name):
-                if selected_result and baseline_name:
-                    if duplicate_names:
-                        st.error(f"基线方案名称 '{baseline_name}' 已存在，请使用其他名称。")
-                    else:
+            name_duplicate = False
+            name_duplicate_detail = ""
+            result_already_baseline = False
+            result_baseline_detail = ""
+            
+            if baseline_name:
+                for b in all_baselines:
+                    if b.name.strip().lower() == baseline_name.strip().lower():
+                        name_duplicate = True
+                        name_duplicate_detail = f"创建人: {b.created_by}, 创建时间: {b.created_at[:19] if b.created_at else '未知'}"
+                        break
+            
+            if selected_result:
+                for b in all_baselines:
+                    if b.result_id == selected_result.id:
+                        result_already_baseline = True
+                        result_baseline_detail = f"基线名称: {b.name}, 创建人: {b.created_by}"
+                        break
+            
+            if name_duplicate:
+                st.warning(f"⚠️ 已存在同名基线方案（不区分大小写）：{baseline_name}")
+                st.caption(f"   详情：{name_duplicate_detail}")
+            
+            if result_already_baseline:
+                st.warning(f"⚠️ 该模拟结果已被设置为基线方案")
+                st.caption(f"   详情：{result_baseline_detail}")
+            
+            submit_disabled = not selected_result or not baseline_name or name_duplicate or result_already_baseline
+            
+            if st.button("✅ 设为基线方案", use_container_width=True, disabled=submit_disabled):
+                if selected_result and baseline_name and not name_duplicate and not result_already_baseline:
                         result_snapshot = {
                             "avg_wait_time": selected_result.avg_wait_time,
                             "max_wait_time": selected_result.max_wait_time,
@@ -253,8 +276,12 @@ def perform_scheme_review():
     st.subheader("📊 方案对比复盘")
     
     can_create = can_manage_review()
+    can_export = check_permission("export")
     current_user = get_current_username()
     current_role = get_current_user_role()
+    
+    if not can_create:
+        st.info("🔒 您只有查看权限，无法发起新的复盘对比。如有需要请联系管理员或普通用户。")
     
     try:
         all_results = load_simulation_results()
@@ -282,7 +309,7 @@ def perform_scheme_review():
         return
     
     if len(all_results) < 2:
-        st.info("💡 目前仅有1条模拟结果，仅可查看与基线的单方案对比。建议积累更多方案后进行多方案对比。")
+        st.info("💡 目前仅有1条模拟结果，仅可查看基线详情。建议积累更多方案后进行多方案对比。")
     
     st.markdown("#### 🔧 复盘配置")
     
@@ -326,6 +353,10 @@ def perform_scheme_review():
         date_filter = st.selectbox("按时间筛选", options=date_options)
     
     filtered_results = all_results
+    
+    if baseline_result:
+        filtered_results = [r for r in filtered_results if r.id != baseline_result.id]
+    
     if dept_filter != "全部":
         filtered_results = [r for r in filtered_results if r.department == dept_filter]
     
@@ -347,7 +378,7 @@ def perform_scheme_review():
         ]
     
     if not filtered_results:
-        st.info("📭 没有符合筛选条件的模拟结果。")
+        st.info("📭 没有符合筛选条件的模拟结果（基线方案已自动排除）。")
         return
     
     st.markdown("#### 📋 选择对比方案")
@@ -397,15 +428,17 @@ def perform_scheme_review():
         "🔍 开始复盘对比",
         use_container_width=True,
         type="primary",
-        disabled=not selected_results or not baseline_result or not review_name
+        disabled=not selected_results or not baseline_result or not review_name or not can_create
     ):
-        if selected_results and baseline_result and review_name:
+        if can_create and selected_results and baseline_result and review_name:
             comparison_items = perform_review_comparison(baseline_result, selected_results)
             st.session_state.current_review_items = comparison_items
             st.session_state.current_review_baseline = selected_baseline
             st.session_state.current_review_baseline_result = baseline_result
             st.session_state.current_review_name = review_name
             st.session_state.current_review_remarks = review_remarks
+        elif not can_create:
+            st.warning("⚠️ 您没有权限发起复盘对比。")
     
     if "current_review_items" in st.session_state and st.session_state.current_review_items:
         st.markdown("---")
@@ -530,30 +563,33 @@ def show_review_results():
             st.info("🔒 您没有权限保存复盘记录。")
     
     with col_export:
-        if st.button("📤 导出简版报告", use_container_width=True):
-            review_name = st.session_state.get("current_review_name", "未命名复盘")
-            review_remarks = st.session_state.get("current_review_remarks", "")
-            
-            temp_review = ReviewRecord(
-                name=review_name,
-                baseline_id=baseline.id,
-                baseline_name=baseline.name,
-                comparison_items=items,
-                created_by=get_current_username(),
-                department=baseline.department,
-                remarks=review_remarks
-            )
-            
-            filepath = export_review_report(temp_review)
-            if filepath:
-                with open(filepath, "r", encoding="utf-8-sig") as f:
-                    st.download_button(
-                        label="⬇️ 下载复盘报告",
-                        data=f.read(),
-                        file_name=os.path.basename(filepath),
-                        mime="text/csv",
-                        use_container_width=True
-                    )
+        if check_permission("export"):
+            if st.button("📤 导出简版报告", use_container_width=True):
+                review_name = st.session_state.get("current_review_name", "未命名复盘")
+                review_remarks = st.session_state.get("current_review_remarks", "")
+                
+                temp_review = ReviewRecord(
+                    name=review_name,
+                    baseline_id=baseline.id,
+                    baseline_name=baseline.name,
+                    comparison_items=items,
+                    created_by=get_current_username(),
+                    department=baseline.department,
+                    remarks=review_remarks
+                )
+                
+                filepath = export_review_report(temp_review)
+                if filepath:
+                    with open(filepath, "r", encoding="utf-8-sig") as f:
+                        st.download_button(
+                            label="⬇️ 下载复盘报告",
+                            data=f.read(),
+                            file_name=os.path.basename(filepath),
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+        else:
+            st.info("🔒 您没有权限导出报告。")
 
 
 def view_review_history():
@@ -650,17 +686,20 @@ def view_review_history():
         
         col_export2, col_del = st.columns([1, 1])
         with col_export2:
-            if st.button("📤 导出此复盘报告", use_container_width=True):
-                filepath = export_review_report(selected_review)
-                if filepath:
-                    with open(filepath, "r", encoding="utf-8-sig") as f:
-                        st.download_button(
-                            label="⬇️ 下载报告",
-                            data=f.read(),
-                            file_name=os.path.basename(filepath),
-                            mime="text/csv",
-                            use_container_width=True
-                        )
+            if check_permission("export"):
+                if st.button("📤 导出此复盘报告", use_container_width=True):
+                    filepath = export_review_report(selected_review)
+                    if filepath:
+                        with open(filepath, "r", encoding="utf-8-sig") as f:
+                            st.download_button(
+                                label="⬇️ 下载报告",
+                                data=f.read(),
+                                file_name=os.path.basename(filepath),
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+            else:
+                st.info("🔒 您没有权限导出报告。")
         
         with col_del:
             if current_role == "admin" or (current_role == "user" and selected_review.created_by == current_user):

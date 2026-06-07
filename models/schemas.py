@@ -103,7 +103,7 @@ ROLES = {
 }
 
 ROLE_PERMISSIONS = {
-    "admin": ["upload_schedule", "simulate", "view_reports", "export", "manage_users", "manage_baseline", "manage_review", "view_all_reviews"],
+    "admin": ["upload_schedule", "simulate", "view_reports", "export", "manage_users", "manage_baseline", "manage_review", "view_all_reviews", "create_review", "set_own_baseline"],
     "user": ["simulate", "view_reports", "export", "create_review", "view_own_reviews", "set_own_baseline"],
-    "auditor": ["view_reports", "export", "view_all_reviews", "view_baseline"]
+    "auditor": ["view_reports", "view_all_reviews", "view_baseline"]
 }

@@ -1,4 +1,4 @@
-.2235719965220931:ae761aa945af1c902e7ad1b1827bb5f1_6a24c05e06a80d66b8e06207.6a24dc4ec811746e90c767d7.6a24dc4bf2f40551eafd3472:Trae CN.T(2026/6/7 10:49:50)import streamlit as st
+import streamlit as st
 import sys
 import os
 import pandas as pd
@@ -13,6 +13,10 @@ from data.persistence import (
     save_simulation_params,
     load_simulation_results,
     save_simulation_results,
+    load_baseline_schemes,
+    save_baseline_schemes,
+    load_review_records,
+    save_review_records,
     ensure_dirs
 )
 
@@ -37,7 +41,7 @@ def main():
     
     ensure_dirs()
     
-    tab1, tab2, tab3 = st.tabs(["📋 排班数据管理", "⚙️ 模拟方案管理", "🗑️ 数据清理"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 排班数据管理", "⚙️ 模拟方案管理", "📊 模拟结果管理", "🗑️ 数据清理"])
     
     with tab1:
         manage_schedule_data()
@@ -46,6 +50,9 @@ def main():
         manage_simulation_params()
     
     with tab3:
+        manage_simulation_results()
+    
+    with tab4:
         manage_data_cleanup()
 
 
@@ -169,7 +176,9 @@ def manage_simulation_params():
                 "单次耗时(分)": p.service_duration,
                 "休息间隔(分)": p.break_interval,
                 "高峰系数": p.peak_factor,
-                "创建时间": p.created_at[:19]
+                "创建时间": p.created_at[:19] if p.created_at else "",
+                "创建人": p.created_by,
+                "部门": p.department
             })
         df = pd.DataFrame(data)
         st.dataframe(df, use_container_width=True)
@@ -186,10 +195,43 @@ def manage_simulation_params():
         st.info("暂无保存的模拟方案")
 
 
+def manage_simulation_results():
+    st.subheader("📊 模拟结果管理")
+    
+    results = load_simulation_results()
+    
+    if results:
+        data = []
+        for r in results:
+            data.append({
+                "方案名称": r.params_name,
+                "平均等待(分)": round(r.avg_wait_time, 2),
+                "最大等待(分)": round(r.max_wait_time, 2),
+                "总接待量": round(r.total_reception, 0),
+                "预估成本(元)": round(r.cost_estimate, 2),
+                "创建时间": r.created_at[:19] if r.created_at else "",
+                "创建人": r.created_by,
+                "部门": r.department
+            })
+        df = pd.DataFrame(data)
+        st.dataframe(df, use_container_width=True)
+        
+        st.info(f"共 {len(results)} 条模拟结果")
+        
+        col_del1, col_del2 = st.columns([1, 1])
+        with col_del1:
+            if st.button("🗑️ 删除所有模拟结果", use_container_width=True):
+                if save_simulation_results([]):
+                    st.success("已清空所有模拟结果")
+                    st.rerun()
+    else:
+        st.info("暂无模拟结果数据")
+
+
 def manage_data_cleanup():
     st.subheader("🗑️ 数据清理")
     
-    col_a, col_b = st.columns([1, 1])
+    col_a, col_b, col_c = st.columns([1, 1, 1])
     
     with col_a:
         results_count = len(load_simulation_results())
@@ -205,8 +247,45 @@ def manage_data_cleanup():
         params_count = len(load_simulation_params())
         st.metric("保存的方案数", params_count)
         
+        if params_count > 0:
+            if st.button("清空所有方案", use_container_width=True):
+                if save_simulation_params([]):
+                    st.success("已清空所有方案")
+                    st.rerun()
+    
+    with col_c:
         schedule_count = len(load_schedule_data())
         st.metric("排班数据记录数", schedule_count)
+        
+        if schedule_count > 0:
+            if st.button("清空所有排班数据", use_container_width=True):
+                if save_schedule_data([]):
+                    st.success("已清空排班数据")
+                    st.rerun()
+    
+    st.markdown("---")
+    
+    col_d, col_e = st.columns([1, 1])
+    
+    with col_d:
+        baseline_count = len(load_baseline_schemes())
+        st.metric("基线方案数", baseline_count)
+        
+        if baseline_count > 0:
+            if st.button("清空所有基线方案", use_container_width=True):
+                if save_baseline_schemes([]):
+                    st.success("已清空所有基线方案")
+                    st.rerun()
+    
+    with col_e:
+        review_count = len(load_review_records())
+        st.metric("复盘记录数", review_count)
+        
+        if review_count > 0:
+            if st.button("清空所有复盘记录", use_container_width=True):
+                if save_review_records([]):
+                    st.success("已清空所有复盘记录")
+                    st.rerun()
     
     st.markdown("---")
     st.warning("⚠️ 注意：数据删除后无法恢复，请谨慎操作！")
