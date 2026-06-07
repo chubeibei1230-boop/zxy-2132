@@ -74,7 +74,14 @@ def show_main_content(auth_manager: AuthManager):
             "simulate": "⚙️ 运行模拟",
             "view_reports": "📈 查看报告",
             "export": "💾 导出数据",
-            "manage_users": "👥 用户管理"
+            "manage_users": "👥 用户管理",
+            "manage_baseline": "🎯 管理基线方案",
+            "manage_review": "📝 管理复盘记录",
+            "view_all_reviews": "👁️ 查看所有复盘",
+            "create_review": "✍️ 创建复盘",
+            "view_own_reviews": "👁️ 查看自己的复盘",
+            "set_own_baseline": "🎯 设置自己的基线",
+            "view_baseline": "👁️ 查看基线方案"
         }
         for p in perms:
             st.write(f"- {perm_map.get(p, p)}")

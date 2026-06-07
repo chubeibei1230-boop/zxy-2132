@@ -1,6 +1,6 @@
 import numpy as np
-from typing import List, Tuple, Optional
-from models.schemas import SimulationParams, SimulationResult
+from typing import List, Tuple, Optional, Dict
+from models.schemas import SimulationParams, SimulationResult, ReviewComparisonItem
 
 
 def moving_average(data: List[float], window: int = 5) -> List[float]:
@@ -115,3 +115,156 @@ def compare_results(results: List[SimulationResult]) -> dict:
         "cost_estimates": [r.cost_estimate for r in results],
     }
     return comparison
+
+
+def calculate_unit_cost(result: SimulationResult) -> float:
+    if result.total_reception > 0:
+        return result.cost_estimate / result.total_reception
+    return 0.0
+
+
+def calculate_change_rate(current: float, baseline: float) -> float:
+    if baseline == 0:
+        return 0.0
+    return (current - baseline) / abs(baseline)
+
+
+def evaluate_conclusion(
+    avg_wait_diff: float,
+    max_wait_diff: float,
+    total_recep_diff: float,
+    cost_diff: float,
+    unit_cost_diff: float
+) -> str:
+    score = 0.0
+    
+    if avg_wait_diff < 0:
+        score += 2.0
+    elif avg_wait_diff == 0:
+        score += 1.0
+    
+    if max_wait_diff < 0:
+        score += 1.5
+    elif max_wait_diff == 0:
+        score += 0.75
+    
+    if total_recep_diff > 0:
+        score += 2.0
+    elif total_recep_diff == 0:
+        score += 1.0
+    
+    if cost_diff < 0:
+        score += 1.5
+    elif cost_diff == 0:
+        score += 0.75
+    
+    if unit_cost_diff < 0:
+        score += 2.0
+    elif unit_cost_diff == 0:
+        score += 1.0
+    
+    max_score = 9.0
+    normalized_score = score / max_score
+    
+    if normalized_score >= 0.7:
+        return "更优"
+    elif normalized_score >= 0.4:
+        return "持平"
+    else:
+        return "退化"
+
+
+def calculate_comparison_item(
+    baseline_result: SimulationResult,
+    compare_result: SimulationResult
+) -> ReviewComparisonItem:
+    baseline_unit_cost = calculate_unit_cost(baseline_result)
+    compare_unit_cost = calculate_unit_cost(compare_result)
+    
+    avg_wait_diff = compare_result.avg_wait_time - baseline_result.avg_wait_time
+    max_wait_diff = compare_result.max_wait_time - baseline_result.max_wait_time
+    total_recep_diff = compare_result.total_reception - baseline_result.total_reception
+    cost_diff = compare_result.cost_estimate - baseline_result.cost_estimate
+    unit_cost_diff = compare_unit_cost - baseline_unit_cost
+    
+    avg_wait_change = calculate_change_rate(compare_result.avg_wait_time, baseline_result.avg_wait_time)
+    max_wait_change = calculate_change_rate(compare_result.max_wait_time, baseline_result.max_wait_time)
+    total_recep_change = calculate_change_rate(compare_result.total_reception, baseline_result.total_reception)
+    cost_change = calculate_change_rate(compare_result.cost_estimate, baseline_result.cost_estimate)
+    unit_cost_change = calculate_change_rate(compare_unit_cost, baseline_unit_cost)
+    
+    conclusion = evaluate_conclusion(
+        avg_wait_diff, max_wait_diff, total_recep_diff, cost_diff, unit_cost_diff)
+    
+    score = calculate_comprehensive_score(
+        avg_wait_diff, max_wait_diff, total_recep_diff, cost_diff, unit_cost_diff,
+        baseline_result.avg_wait_time, baseline_result.max_wait_time,
+        baseline_result.total_reception, baseline_result.cost_estimate,
+        baseline_unit_cost
+    )
+    
+    return ReviewComparisonItem(
+        result_id=compare_result.id,
+        result_name=compare_result.params_name,
+        avg_wait_time_diff=avg_wait_diff,
+        avg_wait_time_change_rate=avg_wait_change,
+        max_wait_time_diff=max_wait_diff,
+        max_wait_time_change_rate=max_wait_change,
+        total_reception_diff=total_recep_diff,
+        total_reception_change_rate=total_recep_change,
+        cost_estimate_diff=cost_diff,
+        cost_estimate_change_rate=cost_change,
+        unit_cost_diff=unit_cost_diff,
+        unit_cost_change_rate=unit_cost_change,
+        conclusion=conclusion,
+        score=score
+    )
+
+
+def calculate_comprehensive_score(
+    avg_wait_diff: float,
+    max_wait_diff: float,
+    total_recep_diff: float,
+    cost_diff: float,
+    unit_cost_diff: float,
+    baseline_avg_wait: float,
+    baseline_max_wait: float,
+    baseline_total_recep: float,
+    baseline_cost: float,
+    baseline_unit_cost: float
+) -> float:
+    score = 0.0
+    
+    if baseline_avg_wait > 0:
+        avg_wait_improve = -avg_wait_diff / baseline_avg_wait
+        score += avg_wait_improve * 25.0
+    if baseline_max_wait > 0:
+        max_wait_improve = -max_wait_diff / baseline_max_wait
+        score += max_wait_improve * 20.0
+    
+    if baseline_total_recep > 0:
+        total_recep_improve = total_recep_diff / baseline_total_recep
+        score += total_recep_improve * 25.0
+    
+    if baseline_cost > 0:
+        cost_improve = -cost_diff / baseline_cost
+        score += cost_improve * 15.0
+    
+    if baseline_unit_cost > 0:
+        unit_cost_improve = -unit_cost_diff / baseline_unit_cost
+        score += unit_cost_improve * 15.0
+    
+    return round(score + 50.0, 2)
+
+
+def perform_review_comparison(
+    baseline_result: SimulationResult,
+    compare_results: List[SimulationResult]
+) -> List[ReviewComparisonItem]:
+    items = []
+    for result in compare_results:
+        item = calculate_comparison_item(baseline_result, result)
+        items.append(item)
+    
+    items.sort(key=lambda x: x.score, reverse=True)
+    return items

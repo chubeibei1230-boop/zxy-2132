@@ -167,8 +167,22 @@ def run_simulations(params_list, save_to_history=False):
         save_current_results_to_history()
 
 
+def get_current_username():
+    auth_manager = st.session_state.get("auth_manager")
+    if auth_manager and auth_manager.get_current_user():
+        return auth_manager.get_current_user().username
+    return ""
+
+
 def save_current_results_to_history():
     if st.session_state.current_results:
+        username = get_current_username()
+        for result in st.session_state.current_results:
+            if not result.created_by:
+                result.created_by = username
+            if not result.department:
+                result.department = "default"
+        
         all_results = load_simulation_results()
         all_results.extend(st.session_state.current_results)
         save_simulation_results(all_results)

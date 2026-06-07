@@ -4,7 +4,10 @@ import csv
 import pandas as pd
 from datetime import datetime
 from typing import List, Optional, Dict
-from models.schemas import ScheduleRecord, SimulationParams, SimulationResult
+from models.schemas import (
+    ScheduleRecord, SimulationParams, SimulationResult,
+    BaselineScheme, ReviewComparisonItem, ReviewRecord
+)
 
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data_files")
@@ -131,6 +134,7 @@ def load_simulation_results(filepath: Optional[str] = None) -> List[SimulationRe
         results = []
         for data in data_list:
             result = SimulationResult(
+                id=data.get("id", ""),
                 params_id=data.get("params_id", ""),
                 params_name=data.get("params_name", ""),
                 timestamps=data.get("timestamps", []),
@@ -142,7 +146,9 @@ def load_simulation_results(filepath: Optional[str] = None) -> List[SimulationRe
                 cost_estimate=float(data.get("cost_estimate", 0.0)),
                 wait_time_ma=data.get("wait_time_ma", []),
                 reception_ma=data.get("reception_ma", []),
-                created_at=data.get("created_at", "")
+                created_at=data.get("created_at", ""),
+                created_by=data.get("created_by", ""),
+                department=data.get("department", "default")
             )
             results.append(result)
         return results
@@ -160,6 +166,7 @@ def save_simulation_results(results: List[SimulationResult], filepath: Optional[
         data = []
         for r in results:
             data.append({
+                "id": r.id,
                 "params_id": r.params_id,
                 "params_name": r.params_name,
                 "timestamps": r.timestamps,
@@ -171,7 +178,9 @@ def save_simulation_results(results: List[SimulationResult], filepath: Optional[
                 "cost_estimate": r.cost_estimate,
                 "wait_time_ma": r.wait_time_ma,
                 "reception_ma": r.reception_ma,
-                "created_at": r.created_at
+                "created_at": r.created_at,
+                "created_by": r.created_by,
+                "department": r.department
             })
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -250,3 +259,271 @@ def parse_uploaded_schedule(file_content) -> List[ScheduleRecord]:
     except Exception as e:
         print(f"解析上传文件失败: {e}")
     return records
+
+
+def load_baseline_schemes(filepath: Optional[str] = None) -> List[BaselineScheme]:
+    if filepath is None:
+        filepath = os.path.join(DATA_DIR, "baseline_schemes.json")
+    
+    if not os.path.exists(filepath):
+        return []
+    
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data_list = json.load(f)
+        
+        baselines = []
+        for data in data_list:
+            baseline = BaselineScheme(
+                id=data.get("id", ""),
+                name=data.get("name", ""),
+                result_id=data.get("result_id", ""),
+                result_snapshot=data.get("result_snapshot", {}),
+                created_by=data.get("created_by", ""),
+                created_at=data.get("created_at", ""),
+                department=data.get("department", "default"),
+                description=data.get("description", ""),
+                is_active=data.get("is_active", True)
+            )
+            baselines.append(baseline)
+        return baselines
+    except Exception as e:
+        print(f"加载基线方案失败: {e}")
+        return []
+
+
+def save_baseline_schemes(baselines: List[BaselineScheme], filepath: Optional[str] = None) -> bool:
+    ensure_dirs()
+    if filepath is None:
+        filepath = os.path.join(DATA_DIR, "baseline_schemes.json")
+    
+    try:
+        data = []
+        for b in baselines:
+            data.append({
+                "id": b.id,
+                "name": b.name,
+                "result_id": b.result_id,
+                "result_snapshot": b.result_snapshot,
+                "created_by": b.created_by,
+                "created_at": b.created_at,
+                "department": b.department,
+                "description": b.description,
+                "is_active": b.is_active
+            })
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"保存基线方案失败: {e}")
+        return False
+
+
+def add_baseline_scheme(baseline: BaselineScheme) -> bool:
+    baselines = load_baseline_schemes()
+    baselines.append(baseline)
+    return save_baseline_schemes(baselines)
+
+
+def update_baseline_scheme(baseline_id: str, **kwargs) -> bool:
+    baselines = load_baseline_schemes()
+    for i, b in enumerate(baselines):
+        if b.id == baseline_id:
+            for key, value in kwargs.items():
+                if hasattr(b, key):
+                    setattr(b, key, value)
+            baselines[i] = b
+            return save_baseline_schemes(baselines)
+    return False
+
+
+def delete_baseline_scheme(baseline_id: str) -> bool:
+    baselines = load_baseline_schemes()
+    baselines = [b for b in baselines if b.id != baseline_id]
+    return save_baseline_schemes(baselines)
+
+
+def get_baseline_by_id(baseline_id: str) -> Optional[BaselineScheme]:
+    baselines = load_baseline_schemes()
+    for b in baselines:
+        if b.id == baseline_id:
+            return b
+    return None
+
+
+def load_review_records(filepath: Optional[str] = None) -> List[ReviewRecord]:
+    if filepath is None:
+        filepath = os.path.join(DATA_DIR, "review_records.json")
+    
+    if not os.path.exists(filepath):
+        return []
+    
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data_list = json.load(f)
+        
+        records = []
+        for data in data_list:
+            items_data = data.get("comparison_items", [])
+            items = []
+            for item_data in items_data:
+                item = ReviewComparisonItem(
+                    result_id=item_data.get("result_id", ""),
+                    result_name=item_data.get("result_name", ""),
+                    avg_wait_time_diff=float(item_data.get("avg_wait_time_diff", 0.0)),
+                    avg_wait_time_change_rate=float(item_data.get("avg_wait_time_change_rate", 0.0)),
+                    max_wait_time_diff=float(item_data.get("max_wait_time_diff", 0.0)),
+                    max_wait_time_change_rate=float(item_data.get("max_wait_time_change_rate", 0.0)),
+                    total_reception_diff=float(item_data.get("total_reception_diff", 0.0)),
+                    total_reception_change_rate=float(item_data.get("total_reception_change_rate", 0.0)),
+                    cost_estimate_diff=float(item_data.get("cost_estimate_diff", 0.0)),
+                    cost_estimate_change_rate=float(item_data.get("cost_estimate_change_rate", 0.0)),
+                    unit_cost_diff=float(item_data.get("unit_cost_diff", 0.0)),
+                    unit_cost_change_rate=float(item_data.get("unit_cost_change_rate", 0.0)),
+                    conclusion=item_data.get("conclusion", ""),
+                    score=float(item_data.get("score", 0.0))
+                )
+                items.append(item)
+            
+            record = ReviewRecord(
+                id=data.get("id", ""),
+                name=data.get("name", ""),
+                baseline_id=data.get("baseline_id", ""),
+                baseline_name=data.get("baseline_name", ""),
+                comparison_items=items,
+                created_by=data.get("created_by", ""),
+                created_at=data.get("created_at", ""),
+                department=data.get("department", "default"),
+                remarks=data.get("remarks", "")
+            )
+            records.append(record)
+        return records
+    except Exception as e:
+        print(f"加载复盘记录失败: {e}")
+        return []
+
+
+def save_review_records(records: List[ReviewRecord], filepath: Optional[str] = None) -> bool:
+    ensure_dirs()
+    if filepath is None:
+        filepath = os.path.join(DATA_DIR, "review_records.json")
+    
+    try:
+        data = []
+        for r in records:
+            items_data = []
+            for item in r.comparison_items:
+                items_data.append({
+                    "result_id": item.result_id,
+                    "result_name": item.result_name,
+                    "avg_wait_time_diff": item.avg_wait_time_diff,
+                    "avg_wait_time_change_rate": item.avg_wait_time_change_rate,
+                    "max_wait_time_diff": item.max_wait_time_diff,
+                    "max_wait_time_change_rate": item.max_wait_time_change_rate,
+                    "total_reception_diff": item.total_reception_diff,
+                    "total_reception_change_rate": item.total_reception_change_rate,
+                    "cost_estimate_diff": item.cost_estimate_diff,
+                    "cost_estimate_change_rate": item.cost_estimate_change_rate,
+                    "unit_cost_diff": item.unit_cost_diff,
+                    "unit_cost_change_rate": item.unit_cost_change_rate,
+                    "conclusion": item.conclusion,
+                    "score": item.score
+                })
+            data.append({
+                "id": r.id,
+                "name": r.name,
+                "baseline_id": r.baseline_id,
+                "baseline_name": r.baseline_name,
+                "comparison_items": items_data,
+                "created_by": r.created_by,
+                "created_at": r.created_at,
+                "department": r.department,
+                "remarks": r.remarks
+            })
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"保存复盘记录失败: {e}")
+        return False
+
+
+def add_review_record(record: ReviewRecord) -> bool:
+    records = load_review_records()
+    records.append(record)
+    return save_review_records(records)
+
+
+def delete_review_record(record_id: str) -> bool:
+    records = load_review_records()
+    records = [r for r in records if r.id != record_id]
+    return save_review_records(records)
+
+
+def get_review_by_id(record_id: str) -> Optional[ReviewRecord]:
+    records = load_review_records()
+    for r in records:
+        if r.id == record_id:
+            return r
+    return None
+
+
+def export_review_report(review: ReviewRecord, filename: Optional[str] = None) -> str:
+    ensure_dirs()
+    if filename is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"review_report_{review.id}_{timestamp}.csv"
+    
+    filepath = os.path.join(EXPORT_DIR, filename)
+    
+    try:
+        rows = []
+        rows.append({
+            "复盘名称": review.name,
+            "基线方案": review.baseline_name,
+            "创建人": review.created_by,
+            "创建时间": review.created_at[:19] if review.created_at else "",
+            "部门": review.department,
+            "备注": review.remarks
+        })
+        rows.append({})
+        
+        rows.append({
+            "对比方案": "",
+            "平均等待时长差异": "",
+            "平均等待变化率": "",
+            "最大等待时长差异": "",
+            "最大等待变化率": "",
+            "总接待量差异": "",
+            "总接待量变化率": "",
+            "预估成本差异": "",
+            "预估成本变化率": "",
+            "单位成本差异": "",
+            "单位成本变化率": "",
+            "综合结论": "",
+            "综合评分": ""
+        })
+        
+        for item in review.comparison_items:
+            rows.append({
+                "对比方案": item.result_name,
+                "平均等待时长差异": f"{item.avg_wait_time_diff:+.2f}分钟",
+                "平均等待变化率": f"{item.avg_wait_time_change_rate:+.2%}",
+                "最大等待时长差异": f"{item.max_wait_time_diff:+.2f}分钟",
+                "最大等待变化率": f"{item.max_wait_time_change_rate:+.2%}",
+                "总接待量差异": f"{item.total_reception_diff:+.2f}人",
+                "总接待量变化率": f"{item.total_reception_change_rate:+.2%}",
+                "预估成本差异": f"{item.cost_estimate_diff:+.2f}元",
+                "预估成本变化率": f"{item.cost_estimate_change_rate:+.2%}",
+                "单位成本差异": f"{item.unit_cost_diff:+.2f}元/人",
+                "单位成本变化率": f"{item.unit_cost_change_rate:+.2%}",
+                "综合结论": item.conclusion,
+                "综合评分": f"{item.score:.2f}"
+            })
+        
+        df = pd.DataFrame(rows)
+        df.to_csv(filepath, index=False, encoding="utf-8-sig")
+        return filepath
+    except Exception as e:
+        print(f"导出复盘报告失败: {e}")
+        return ""
